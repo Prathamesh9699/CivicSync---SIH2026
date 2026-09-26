@@ -1,0 +1,35 @@
+{
+  "name": "cleantrack-workspace",
+  "private": true,
+  "version": "2.0.0",
+  "description": "CleanTrack - AI-Powered Municipal Cleanliness & Smart Civic Triage Platform (SIH)",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "client": "npm --prefix frontend run dev",
+    "server": "npm --prefix backend run dev",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "seed": "npm --prefix backend run seed",
+    "install:all": "npm --prefix frontend install && npm --prefix backend install"
+  },
+  "keywords": [
+    "sih",
+    "smart-india-hackathon",
+    "cleantrack",
+    "waste-management",
+    "yolov8",
+    "computer-vision",
+    "civic-tech",
+    "react",
+    "nodejs",
+    "mongodb"
+  ],
+  "author": "CleanTrack Engineering Team",
+  "license": "MIT"
+}

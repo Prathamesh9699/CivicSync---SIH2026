@@ -1,0 +1,871 @@
+"""
+CleanTrack AI - Stage 2 Multi-Object Waste Detector
+Hierarchical multi-object detector supporting the 11 CleanTrack classes:
+  0: organic_wet
+  1: plastic
+  2: paper_cardboard
+  3: metal
+  4: glass
+  5: textile
+  6: ewaste
+  7: construction_debris
+  8: biomedical_sanitary
+  9: hazardous_looking
+  10: residual_mixed
+
+Applies:
+  - Class-specific confidence thresholds (sharps: 0.28, plastics: 0.35, general: 0.35)
+  - Cross-model Soft-NMS / IoU de-duplication (biomedical takes priority over general plastic)
+  - Small object retention (needles, caps, ampoules)
+  - Physical unit volume (Liters) & weight (Grams) estimation
+  - 100x100 spatial grid union coverage calculation
+"""
+
+import os
+import sys
+import time
+from typing import Dict, Any, List, Optional, Tuple
+from PIL import Image
+import numpy as np
+
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
+
+try:
+    from backend.ai_engine.medical_classifier import MedicalWasteClassifier, MEDICAL_CLASS_METADATA
+except ImportError:
+    try:
+        from medical_classifier import MedicalWasteClassifier, MEDICAL_CLASS_METADATA
+    except ImportError:
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, cur_dir)
+        from medical_classifier import MedicalWasteClassifier, MEDICAL_CLASS_METADATA
+
+try:
+    from backend.ai_engine.roboflow_medical import RoboflowMedicalDetector
+except ImportError:
+    try:
+        from roboflow_medical import RoboflowMedicalDetector
+    except ImportError:
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, cur_dir)
+        from roboflow_medical import RoboflowMedicalDetector
+
+try:
+    from backend.ai_engine.roboflow_ewaste import RoboflowEWasteDetector
+except ImportError:
+    try:
+        from roboflow_ewaste import RoboflowEWasteDetector
+    except ImportError:
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, cur_dir)
+        from roboflow_ewaste import RoboflowEWasteDetector
+
+
+# CleanTrack Master 11-Class Taxonomy Definitions
+CLEANTRACK_TAXONOMY = {
+    0: {
+        "key": "organic_wet",
+        "label": "Organic & Biodegradable Waste",
+        "stream": "GREEN STREAM — Composting / Biogas Digestion",
+        "color": "#16a34a",
+        "bg_color": "#15803d",
+        "default_volume_l": 0.40,
+        "default_weight_g": 250.0
+    },
+    1: {
+        "key": "plastic",
+        "label": "Plastic Waste (Dry Recyclable)",
+        "stream": "BLUE/DRY STREAM — Material Recovery Facility (MRF)",
+        "color": "#0284c7",
+        "bg_color": "#0369a1",
+        "default_volume_l": 0.80,
+        "default_weight_g": 40.0
+    },
+    2: {
+        "key": "paper_cardboard",
+        "label": "Paper & Cardboard Packaging",
+        "stream": "BLUE/DRY STREAM — Paper Mill Pulping",
+        "color": "#d97706",
+        "bg_color": "#b45309",
+        "default_volume_l": 1.50,
+        "default_weight_g": 90.0
+    },
+    3: {
+        "key": "metal",
+        "label": "Metal & Beverage Can",
+        "stream": "DRY STREAM — Metal Foundry Smelting",
+        "color": "#64748b",
+        "bg_color": "#475569",
+        "default_volume_l": 0.35,
+        "default_weight_g": 25.0
+    },
+    4: {
+        "key": "glass",
+        "label": "Glass Container / Bottle",
+        "stream": "DRY STREAM — Glass Cullet Remelting",
+        "color": "#06b6d4",
+        "bg_color": "#0891b2",
+        "default_volume_l": 0.65,
+        "default_weight_g": 280.0
+    },
+    5: {
+        "key": "textile",
+        "label": "Textile & Fabric Scrap",
+        "stream": "DRY STREAM — Shoddy Yarn / Upcycling",
+        "color": "#8b5cf6",
+        "bg_color": "#7c3aed",
+        "default_volume_l": 1.20,
+        "default_weight_g": 180.0
+    },
+    6: {
+        "key": "ewaste",
+        "label": "Electronic & Electrical Waste",
+        "stream": "GREY STREAM — Authorized E-Waste Dismantler (RoHS/EPR)",
+        "color": "#9333ea",
+        "bg_color": "#7e22ce",
+        "default_volume_l": 1.00,
+        "default_weight_g": 350.0
+    },
+    7: {
+        "key": "construction_debris",
+        "label": "Construction & Demolition (C&D) Debris",
+        "stream": "HEAVY STREAM — C&D Aggregate Processing Plant",
+        "color": "#78716c",
+        "bg_color": "#57534e",
+        "default_volume_l": 5.00,
+        "default_weight_g": 4500.0
+    },
+    8: {
+        "key": "biomedical_sanitary",
+        "label": "Biomedical-looking & Sanitary Waste",
+        "stream": "YELLOW/WHITE STREAM — CBWTF Incineration & Autoclaving",
+        "color": "#ef4444",
+        "bg_color": "#b91c1c",
+        "default_volume_l": 0.25,
+        "default_weight_g": 25.0
+    },
+    9: {
+        "key": "hazardous_looking",
+        "label": "Hazardous-looking Chemical / Toxic Waste",
+        "stream": "RED STREAM — Hazardous Waste TSDF Secured Landfill",
+        "color": "#dc2626",
+        "bg_color": "#991b1b",
+        "default_volume_l": 0.50,
+        "default_weight_g": 120.0
+    },
+    10: {
+        "key": "residual_mixed",
+        "label": "Residual Non-Recyclable Mixed Waste",
+        "stream": "BLACK STREAM — Waste-to-Energy (RDF) / Engineered Landfill",
+        "color": "#475569",
+        "bg_color": "#334155",
+        "default_volume_l": 0.50,
+        "default_weight_g": 80.0
+    }
+}
+
+# Physical Unit Calibration per sub-item
+PHYSICAL_UNIT_MAP = {
+    # Plastic items
+    'pet': {'volume_l': 0.80, 'weight_g': 38.0, 'class_id': 1, 'name': 'PET Plastic Bottle (~750ml-1L)', 'polymer': 'PET #1'},
+    'pead': {'volume_l': 1.60, 'weight_g': 95.0, 'class_id': 1, 'name': 'HDPE Rigid Container (~1.5L)', 'polymer': 'HDPE #2'},
+    'mixed_plastic_soft': {'volume_l': 0.35, 'weight_g': 18.0, 'class_id': 1, 'name': 'Soft Plastic Packaging & Film', 'polymer': 'LDPE #4'},
+    'mixed_plastic_rigid': {'volume_l': 1.20, 'weight_g': 110.0, 'class_id': 1, 'name': 'Rigid Polymer Waste', 'polymer': 'PP #5'},
+    'pet_oleo': {'volume_l': 0.90, 'weight_g': 45.0, 'class_id': 1, 'name': 'Colored / Oil PET Bottle', 'polymer': 'PET-O'},
+    'ecal': {'volume_l': 0.60, 'weight_g': 32.0, 'class_id': 1, 'name': 'Tetra Pak Composite Carton', 'polymer': 'PolyAl Laminate'},
+    'metal': {'volume_l': 0.35, 'weight_g': 22.0, 'class_id': 3, 'name': 'Aluminium / Steel Can', 'polymer': 'Aluminium / Tin'},
+    'cardboard': {'volume_l': 2.50, 'weight_g': 140.0, 'class_id': 2, 'name': 'Cardboard Packaging Box', 'polymer': 'Cellulose Fiber'},
+
+    # Biomedical Biohazards
+    'Syringe': {'volume_l': 0.08, 'weight_g': 14.0, 'class_id': 8, 'name': 'Clinical Syringe (Biohazard / Sharps)', 'polymer': 'Polypropylene / Steel', 'is_sharps': True},
+    'Needle': {'volume_l': 0.015, 'weight_g': 3.5, 'class_id': 8, 'name': 'Hypodermic Needle (Sharps Hazard)', 'polymer': 'Surgical Steel', 'is_sharps': True},
+    'Needle Cap': {'volume_l': 0.02, 'weight_g': 3.0, 'class_id': 8, 'name': 'Needle Protective Cap', 'polymer': 'Rigid Polypropylene', 'is_sharps': True},
+    'Face Mask': {'volume_l': 0.12, 'weight_g': 7.0, 'class_id': 8, 'name': 'Medical Surgical Face Mask', 'polymer': 'Non-Woven Polypropylene', 'is_sharps': False},
+    'Medical/Surgical Glove': {'volume_l': 0.20, 'weight_g': 11.0, 'class_id': 8, 'name': 'Latex / Nitrile Medical Glove', 'polymer': 'Nitrile / Latex Rubber', 'is_sharps': False},
+    'Bandage': {'volume_l': 0.25, 'weight_g': 25.0, 'class_id': 8, 'name': 'Soiled Medical Bandage Roll', 'polymer': 'Cotton / Viscose Gauze', 'is_sharps': False},
+    'Gauze': {'volume_l': 0.15, 'weight_g': 15.0, 'class_id': 8, 'name': 'Sterile Gauze Swab', 'polymer': 'Cellulose Cotton Mesh', 'is_sharps': False},
+    'Cotton / Medical Cotton': {'volume_l': 0.18, 'weight_g': 18.0, 'class_id': 8, 'name': 'Contaminated Medical Cotton', 'polymer': 'Absorbent Cotton Fiber', 'is_sharps': False},
+    'IV/Infusion Tube': {'volume_l': 0.45, 'weight_g': 60.0, 'class_id': 8, 'name': 'IV Infusion Tubing Set', 'polymer': 'Medical Grade PVC / Polyurethane', 'is_sharps': False},
+    'IV/Fluid Bottle': {'volume_l': 0.90, 'weight_g': 75.0, 'class_id': 8, 'name': 'IV Saline / Infusion Bottle', 'polymer': 'Medical Grade LDPE / PP', 'is_sharps': False},
+    'Test Tube': {'volume_l': 0.06, 'weight_g': 28.0, 'class_id': 8, 'name': 'Clinical Blood Vacutainer / Test Tube', 'polymer': 'Borosilicate Glass / PET', 'is_sharps': False},
+    'Medical Bottle / Vial': {'volume_l': 0.08, 'weight_g': 40.0, 'class_id': 8, 'name': 'Medicine Glass Ampoule / Vial', 'polymer': 'Type 1 Neutral Glass', 'is_sharps': True},
+    'Medicine Packaging': {'volume_l': 0.08, 'weight_g': 8.0, 'class_id': 8, 'name': 'Pharmaceutical Blister Pack', 'polymer': 'PVC / Aluminium Foil', 'is_sharps': False},
+    'Medical Packaging': {'volume_l': 0.30, 'weight_g': 16.0, 'class_id': 8, 'name': 'Sterile Medical Supply Packaging', 'polymer': 'Tyvek / Polyethylene Film', 'is_sharps': False},
+    'Sanitary Waste': {'volume_l': 0.40, 'weight_g': 45.0, 'class_id': 8, 'name': 'Sanitary / Hygiene Waste', 'polymer': 'Superabsorbent Polymer / Polyolefin', 'is_sharps': False},
+    'Medical Disposable': {'volume_l': 0.30, 'weight_g': 35.0, 'class_id': 8, 'name': 'Single-Use Medical Disposable', 'polymer': 'Mixed Medical Plastic', 'is_sharps': False},
+    'Other Biomedical-looking Waste': {'volume_l': 0.50, 'weight_g': 50.0, 'class_id': 8, 'name': 'Clinical Biohazard Waste Composite', 'polymer': 'Composite Clinical Material', 'is_sharps': False},
+
+    # New Medical Waste Model (17 Classes)
+    'body_tissue_organ': {'volume_l': 0.50, 'weight_g': 300.0, 'class_id': 8, 'name': 'Pathological Anatomical Waste', 'polymer': 'Pathological Tissue', 'is_sharps': False},
+    'gauze': {'volume_l': 0.15, 'weight_g': 15.0, 'class_id': 8, 'name': 'Surgical Gauze Swab', 'polymer': 'Woven Cotton Mesh', 'is_sharps': False},
+    'glass_equipment_packaging': {'volume_l': 0.10, 'weight_g': 35.0, 'class_id': 8, 'name': 'Medical Glass Ampoule / Packaging', 'polymer': 'Type I Glass', 'is_sharps': True},
+    'gloves': {'volume_l': 0.20, 'weight_g': 11.0, 'class_id': 8, 'name': 'Medical / Surgical Latex Glove', 'polymer': 'Latex / Nitrile Rubber', 'is_sharps': False},
+    'mask': {'volume_l': 0.12, 'weight_g': 7.0, 'class_id': 8, 'name': 'Medical / Surgical Face Mask', 'polymer': 'Non-Woven Polypropylene', 'is_sharps': False},
+    'medical_cap': {'volume_l': 0.10, 'weight_g': 6.0, 'class_id': 8, 'name': 'Disposable Medical Surgical Cap', 'polymer': 'Non-Woven Polypropylene', 'is_sharps': False},
+    'medical_glasses': {'volume_l': 0.25, 'weight_g': 45.0, 'class_id': 8, 'name': 'Medical Protective Eye Goggles', 'polymer': 'Polycarbonate Plastic', 'is_sharps': False},
+    'metal_equipment_packaging': {'volume_l': 0.20, 'weight_g': 25.0, 'class_id': 8, 'name': 'Medical Metal Equipment Packaging', 'polymer': 'Aluminium / Foil Barrier', 'is_sharps': False},
+    'organic_waste': {'volume_l': 0.40, 'weight_g': 200.0, 'class_id': 8, 'name': 'Clinical Organic / Biological Waste', 'polymer': 'Organic Bio-Waste', 'is_sharps': False},
+    'paper_equipment_packaging': {'volume_l': 0.20, 'weight_g': 12.0, 'class_id': 8, 'name': 'Pharmaceutical / Medical Paper Packaging', 'polymer': 'Medical Grade Paper / Foil', 'is_sharps': False},
+    'plastic_equipment_packaging': {'volume_l': 0.25, 'weight_g': 15.0, 'class_id': 8, 'name': 'Sterile Medical Plastic Packaging', 'polymer': 'Sterile Medical Polymer Film', 'is_sharps': False},
+    'shoe_cover': {'volume_l': 0.08, 'weight_g': 8.0, 'class_id': 8, 'name': 'Medical Disposable Shoe Cover', 'polymer': 'Chlorinated Polyethylene (CPE)', 'is_sharps': False},
+    'syringe': {'volume_l': 0.08, 'weight_g': 14.0, 'class_id': 8, 'name': 'Clinical Syringe (Biohazard / Sharps)', 'polymer': 'Polypropylene / Steel', 'is_sharps': True},
+    'syringe_needle': {'volume_l': 0.015, 'weight_g': 3.5, 'class_id': 8, 'name': 'Hypodermic Needle (Sharps Hazard)', 'polymer': 'Surgical Steel', 'is_sharps': True},
+    'test_tube': {'volume_l': 0.06, 'weight_g': 28.0, 'class_id': 8, 'name': 'Clinical Blood / Vacutainer Test Tube', 'polymer': 'Borosilicate Glass / PET', 'is_sharps': False},
+    'tweezers': {'volume_l': 0.04, 'weight_g': 25.0, 'class_id': 8, 'name': 'Medical Dressing Tweezers / Forceps', 'polymer': 'Surgical Stainless Steel', 'is_sharps': True},
+    'urine_bag': {'volume_l': 1.50, 'weight_g': 65.0, 'class_id': 8, 'name': 'Medical Urine Drainage Bag', 'polymer': 'Medical PVC', 'is_sharps': False},
+
+    # E-Waste (37 Classes from CleanTrack YOLO11 Model)
+    'Battery': {'volume_l': 0.15, 'weight_g': 80.0, 'class_id': 6, 'name': 'Hazardous Battery Cell', 'polymer': 'Lithium / Alkaline Heavy Metal', 'is_sharps': False},
+    'Blood-Pressure-Monitor': {'volume_l': 0.80, 'weight_g': 350.0, 'class_id': 6, 'name': 'Digital BP Monitor', 'polymer': 'Electronic Plastic / Sensor', 'is_sharps': False},
+    'Boiler': {'volume_l': 15.0, 'weight_g': 8000.0, 'class_id': 6, 'name': 'Electric Water Boiler', 'polymer': 'Metal Appliance / Heating Element', 'is_sharps': False},
+    'Clothes-Iron': {'volume_l': 1.50, 'weight_g': 1200.0, 'class_id': 6, 'name': 'Electric Clothes Iron', 'polymer': 'Thermostatic Plastic & Metal', 'is_sharps': False},
+    'Coffee-Machine': {'volume_l': 4.00, 'weight_g': 2500.0, 'class_id': 6, 'name': 'Electric Coffee Machine', 'polymer': 'Small Home Appliance', 'is_sharps': False},
+    'Computer-Keyboard': {'volume_l': 1.80, 'weight_g': 650.0, 'class_id': 6, 'name': 'Computer Keyboard', 'polymer': 'ABS Plastic / Membrane PCB', 'is_sharps': False},
+    'Computer-Mouse': {'volume_l': 0.30, 'weight_g': 110.0, 'class_id': 6, 'name': 'Computer Mouse', 'polymer': 'ABS Plastic & Micro-switch', 'is_sharps': False},
+    'Cooling-Display': {'volume_l': 8.00, 'weight_g': 4000.0, 'class_id': 6, 'name': 'Cooling Display Unit', 'polymer': 'Commercial Refrigeration E-Waste', 'is_sharps': False},
+    'Desktop-PC': {'volume_l': 18.0, 'weight_g': 7500.0, 'class_id': 6, 'name': 'Desktop Computer CPU Tower', 'polymer': 'Sheet Metal & Motherboard Scrap', 'is_sharps': False},
+    'Digital-Oscilloscope': {'volume_l': 5.00, 'weight_g': 3000.0, 'class_id': 6, 'name': 'Digital Oscilloscope / Lab Gear', 'polymer': 'Industrial Test Equipment', 'is_sharps': False},
+    'Drone': {'volume_l': 2.00, 'weight_g': 800.0, 'class_id': 6, 'name': 'Drone / UAV Electronics', 'polymer': 'Carbon Fiber / LiPo Electronics', 'is_sharps': False},
+    'Electric-Guitar': {'volume_l': 6.00, 'weight_g': 3500.0, 'class_id': 6, 'name': 'Electric Guitar / Audio Gear', 'polymer': 'Electronic Instrument', 'is_sharps': False},
+    'Electronic-Keyboard': {'volume_l': 10.0, 'weight_g': 4500.0, 'class_id': 6, 'name': 'Electronic Music Synthesizer', 'polymer': 'Musical Instrument Electronics', 'is_sharps': False},
+    'Flashlight': {'volume_l': 0.40, 'weight_g': 150.0, 'class_id': 6, 'name': 'Electric Flashlight / Torch', 'polymer': 'Aluminium / LED Battery Device', 'is_sharps': False},
+    'Flat-Panel-Monitor': {'volume_l': 8.00, 'weight_g': 3500.0, 'class_id': 6, 'name': 'Flat-Panel LCD/LED Monitor', 'polymer': 'Display Panel / Circuitry', 'is_sharps': False},
+    'Flat-Panel-TV': {'volume_l': 15.0, 'weight_g': 7000.0, 'class_id': 6, 'name': 'Flat-Panel Television', 'polymer': 'Television Display E-Waste', 'is_sharps': False},
+    'Glucose-Meter': {'volume_l': 0.20, 'weight_g': 100.0, 'class_id': 6, 'name': 'Digital Blood Glucose Meter', 'polymer': 'Medical Diagnostic Electronic', 'is_sharps': False},
+    'HDD': {'volume_l': 0.40, 'weight_g': 450.0, 'class_id': 6, 'name': 'Magnetic Hard Disk Drive (HDD)', 'polymer': 'Aluminium Casting & Magnet Scrap', 'is_sharps': False},
+    'Laptop': {'volume_l': 2.50, 'weight_g': 1800.0, 'class_id': 6, 'name': 'Laptop Computer', 'polymer': 'Lithium-Ion & PCB Assembly', 'is_sharps': False},
+    'Microwave': {'volume_l': 20.0, 'weight_g': 12000.0, 'class_id': 6, 'name': 'Microwave Oven Appliance', 'polymer': 'Magnetron & Sheet Metal Scrap', 'is_sharps': False},
+    'Music-Player': {'volume_l': 0.25, 'weight_g': 120.0, 'class_id': 6, 'name': 'Portable Media / Audio Player', 'polymer': 'Consumer Audio E-Waste', 'is_sharps': False},
+    'Oven': {'volume_l': 25.0, 'weight_g': 15000.0, 'class_id': 6, 'name': 'Electric Oven Appliance', 'polymer': 'Heavy Domestic Electrical Appliance', 'is_sharps': False},
+    'PCB': {'volume_l': 0.30, 'weight_g': 120.0, 'class_id': 6, 'name': 'Printed Circuit Board (PCB Scrap)', 'polymer': 'FR4 Fiberglass & Solder Metals', 'is_sharps': False},
+    'Photovoltaic-Panel': {'volume_l': 15.0, 'weight_g': 8000.0, 'class_id': 6, 'name': 'Solar Photovoltaic Panel', 'polymer': 'Silicon Solar Cell & Glass Scrap', 'is_sharps': False},
+    'Projector': {'volume_l': 4.00, 'weight_g': 2800.0, 'class_id': 6, 'name': 'Optical Video Projector', 'polymer': 'Optoelectronic Device', 'is_sharps': False},
+    'Refrigerator': {'volume_l': 80.0, 'weight_g': 35000.0, 'class_id': 6, 'name': 'Refrigerator / Cooling Appliance', 'polymer': 'Compressor & Refrigerant Appliance', 'is_sharps': False},
+    'Rotary-Mower': {'volume_l': 30.0, 'weight_g': 15000.0, 'class_id': 6, 'name': 'Electric Rotary Lawn Mower', 'polymer': 'Heavy Motor Appliance', 'is_sharps': False},
+    'Router': {'volume_l': 0.80, 'weight_g': 350.0, 'class_id': 6, 'name': 'Wi-Fi Network Router', 'polymer': 'Networking Hardware E-Waste', 'is_sharps': False},
+    'Server': {'volume_l': 20.0, 'weight_g': 12000.0, 'class_id': 6, 'name': 'Enterprise Rack Server', 'polymer': 'High-Density Server Circuitry', 'is_sharps': False},
+    'Smartphone': {'volume_l': 0.25, 'weight_g': 180.0, 'class_id': 6, 'name': 'Discarded Smartphone', 'polymer': 'Gorilla Glass & Li-Ion Battery', 'is_sharps': False},
+    'Smoke-Detector': {'volume_l': 0.30, 'weight_g': 140.0, 'class_id': 6, 'name': 'Smoke Detector Sensor', 'polymer': 'Sensor / Ionic Electronic Waste', 'is_sharps': False},
+    'Straight-Tube-Fluorescent-Lamp': {'volume_l': 0.80, 'weight_g': 200.0, 'class_id': 6, 'name': 'Fluorescent Tube Lamp (Mercury Hazard)', 'polymer': 'Glass & Mercury Vapor Hazard', 'is_sharps': True},
+    'Street-Lamp': {'volume_l': 4.00, 'weight_g': 2000.0, 'class_id': 6, 'name': 'Street Lighting Fixture', 'polymer': 'Municipal Luminaire Scrap', 'is_sharps': False},
+    'TV-Remote-Control': {'volume_l': 0.20, 'weight_g': 90.0, 'class_id': 6, 'name': 'Infrared TV Remote Control', 'polymer': 'ABS Plastic & Button Circuitry', 'is_sharps': False},
+    'Telephone-Set': {'volume_l': 0.80, 'weight_g': 450.0, 'class_id': 6, 'name': 'Landline Telephone Set', 'polymer': 'Telecom Hardware E-Waste', 'is_sharps': False},
+    'USB-Flash-Drive': {'volume_l': 0.05, 'weight_g': 20.0, 'class_id': 6, 'name': 'USB Flash Drive / Thumb Drive', 'polymer': 'Solid-State Memory Scrap', 'is_sharps': False},
+    'Washing-Machine': {'volume_l': 60.0, 'weight_g': 28000.0, 'class_id': 6, 'name': 'Automatic Washing Machine', 'polymer': 'Major Domestic White Goods', 'is_sharps': False}
+}
+
+# COCO General Object fallback mapping
+COCO_FALLBACK_MAP = {
+    'bottle': {'class_id': 1, 'name': 'Plastic Beverage Bottle', 'volume_l': 0.75, 'weight_g': 35.0},
+    'cup': {'class_id': 1, 'name': 'Disposable Plastic / Paper Cup', 'volume_l': 0.30, 'weight_g': 12.0},
+    'wine glass': {'class_id': 4, 'name': 'Discarded Glassware', 'volume_l': 0.40, 'weight_g': 220.0},
+    'fork': {'class_id': 1, 'name': 'Disposable Plastic Cutlery', 'volume_l': 0.05, 'weight_g': 5.0},
+    'knife': {'class_id': 1, 'name': 'Disposable Plastic Cutlery', 'volume_l': 0.05, 'weight_g': 5.0},
+    'spoon': {'class_id': 1, 'name': 'Disposable Plastic Cutlery', 'volume_l': 0.05, 'weight_g': 5.0},
+    'bowl': {'class_id': 1, 'name': 'Disposable Food Bowl', 'volume_l': 0.50, 'weight_g': 20.0},
+    'banana': {'class_id': 0, 'name': 'Discarded Food / Fruit Peel', 'volume_l': 0.15, 'weight_g': 100.0},
+    'apple': {'class_id': 0, 'name': 'Discarded Fruit Waste', 'volume_l': 0.20, 'weight_g': 150.0},
+    'sandwich': {'class_id': 0, 'name': 'Discarded Food Waste', 'volume_l': 0.30, 'weight_g': 200.0},
+    'orange': {'class_id': 0, 'name': 'Discarded Organic Peel', 'volume_l': 0.20, 'weight_g': 120.0},
+    'book': {'class_id': 2, 'name': 'Discarded Paper / Book Material', 'volume_l': 1.00, 'weight_g': 400.0}
+}
+
+
+def compute_iou(box1: List[float], box2: List[float]) -> float:
+    """Computes Intersection over Union (IoU) of two bounding boxes [x1, y1, x2, y2]."""
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    if inter <= 0:
+        return 0.0
+    a1 = max(1e-5, (box1[2] - box1[0]) * (box1[3] - box1[1]))
+    a2 = max(1e-5, (box2[2] - box2[0]) * (box2[3] - box2[1]))
+    return inter / float(a1 + a2 - inter)
+
+
+def compute_box_intersection_ratio(box1: List[float], box2: List[float]) -> float:
+    """Computes what fraction of box1 is contained inside box2 (intersection / area1)."""
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    if inter <= 0:
+        return 0.0
+    a1 = max(1e-5, (box1[2] - box1[0]) * (box1[3] - box1[1]))
+    return inter / float(a1)
+
+
+def compute_box_union_coverage(boxes: List[List[float]], img_w: int, img_h: int) -> float:
+    """Computes non-overlapping spatial coverage percentage using a 100x100 spatial grid."""
+    if not boxes or img_w <= 0 or img_h <= 0:
+        return 0.0
+    grid = [[False] * 100 for _ in range(100)]
+    for box in boxes:
+        x1 = max(0, min(100, int((box[0] / img_w) * 100)))
+        y1 = max(0, min(100, int((box[1] / img_h) * 100)))
+        x2 = max(0, min(100, int((box[2] / img_w) * 100)))
+        y2 = max(0, min(100, int((box[3] / img_h) * 100)))
+        for y in range(y1, y2):
+            for x in range(x1, x2):
+                grid[y][x] = True
+    covered = sum(row.count(True) for row in grid)
+    return round((covered / 10000.0) * 100.0, 1)
+
+
+class Stage2Detector:
+    """
+    Stage 2 Multi-Object Waste Detector.
+    Integrates specialized biomedical & plastic models, with fallback general object mapping,
+    Soft-NMS de-duplication, physical volume & weight estimation, and spatial coverage.
+    """
+
+    def __init__(self,
+                 biomedical_model_path: Optional[str] = None,
+                 plastic_model_path: Optional[str] = None,
+                 ewaste_model_path: Optional[str] = None,
+                 general_model_path: Optional[str] = None,
+                 medical_classifier_path: Optional[str] = None,
+                 roboflow_model_id: Optional[str] = None,
+                 roboflow_api_key: Optional[str] = None):
+        self.biomedical_model = None
+        self.plastic_model = None
+        self.ewaste_model = None
+        self.general_model = None
+        self.medical_classifier = None
+        self.roboflow_detector = None
+
+        # 0A. Initialize Roboflow Medical Waste Segmentation Detector
+        try:
+            self.roboflow_detector = RoboflowMedicalDetector(
+                model_id=roboflow_model_id,
+                api_key=roboflow_api_key
+            )
+        except Exception as rbe:
+            print(f"[Stage 2 Detector] Failed to initialize Roboflow detector: {rbe}", file=sys.stderr)
+
+        # 0B. Initialize Medical Waste EfficientNet-B0 Classifier
+        try:
+            self.medical_classifier = MedicalWasteClassifier(medical_classifier_path)
+        except Exception as me:
+            print(f"[Stage 2 Detector] Failed to initialize medical classifier: {me}", file=sys.stderr)
+
+        if not YOLO_AVAILABLE:
+            return
+
+        # Biomedical YOLO model search
+        if not biomedical_model_path:
+            candidates = [
+                os.path.join(os.getcwd(), 'backend', 'models', 'biomedical_best.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'biomedical_best.pt'),
+                os.path.join(os.getcwd(), 'Medical waste detection', 'CleanTrack_Image_Scanner', 'models', 'best.pt'),
+                os.path.join(os.getcwd(), 'Medical waste detection', 'CleanTrack_Image_Scanner', 'cleantrack_biomedical_best.pt'),
+                os.path.join(os.getcwd(), 'Biomedical_Waste_Detector', 'Biomedical_Waste_Detector', 'models', 'best.pt'),
+                os.path.join(os.getcwd(), 'Biomedical_Waste_Detector', 'models', 'best.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Biomedical_Waste_Detector', 'Biomedical_Waste_Detector', 'models', 'best.pt'),
+                'c:/Users/hadol/projects/SIH_website/backend/models/biomedical_best.pt'
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    biomedical_model_path = os.path.abspath(c)
+                    break
+
+        if biomedical_model_path and os.path.exists(biomedical_model_path):
+            try:
+                self.biomedical_model = YOLO(biomedical_model_path)
+                print(f"[Stage 2 Detector] Successfully loaded Biomedical YOLO model from: {biomedical_model_path}", file=sys.stderr)
+            except Exception as e:
+                print(f"[Stage 2 Detector] Failed to load biomedical YOLO model: {e}", file=sys.stderr)
+
+        # Plastic model search (Prioritize calibrated weights)
+        if not plastic_model_path:
+            candidates = [
+                os.path.join(os.getcwd(), 'backend', 'models', 'plastic_best.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'plastic_best.pt'),
+                os.path.join(os.getcwd(), 'backup', 'original_model', 'best.pt'),
+                os.path.join(os.getcwd(), 'best.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'best.pt'),
+                'c:/Users/hadol/projects/SIH_website/backend/models/plastic_best.pt'
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    plastic_model_path = os.path.abspath(c)
+                    break
+
+        if plastic_model_path and os.path.exists(plastic_model_path):
+            try:
+                self.plastic_model = YOLO(plastic_model_path)
+                model_label = "Improved Model" if "improved" in plastic_model_path.lower() else "Original / Calibrated Model"
+                print(f"[Stage 2 Detector] Successfully loaded {model_label} from: {plastic_model_path}", file=sys.stderr)
+            except Exception as e:
+                print(f"[Stage 2 Detector] Failed to load plastic model: {e}", file=sys.stderr)
+                # Attempt fallback to original if load failed
+                fallback_path = os.path.join(os.getcwd(), 'backup', 'original_model', 'best.pt')
+                if os.path.exists(fallback_path):
+                    try:
+                        self.plastic_model = YOLO(fallback_path)
+                        print(f"[Stage 2 Detector] Successfully loaded fallback model from: {fallback_path}", file=sys.stderr)
+                    except Exception as fe:
+                        print(f"[Stage 2 Detector] Fallback model load failed: {fe}", file=sys.stderr)
+
+        # E-Waste model search (CleanTrack YOLO11 model with 37 classes from "Ewaste new model")
+        if not ewaste_model_path:
+            candidates = [
+                os.path.join(os.getcwd(), 'Ewaste new model', 'CleanTrack_ewaste_best.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Ewaste new model', 'CleanTrack_ewaste_best.pt'),
+                os.path.join(os.getcwd(), 'backend', 'models', 'ewaste_best.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'ewaste_best.pt'),
+                os.path.join(os.getcwd(), 'Ewaste_Model', 'CleanTrack_ewaste_best.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Ewaste_Model', 'CleanTrack_ewaste_best.pt'),
+                'c:/Users/hadol/projects/SIH_website/Ewaste new model/CleanTrack_ewaste_best.pt',
+                'c:/Users/hadol/projects/SIH_website/backend/models/ewaste_best.pt'
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    ewaste_model_path = os.path.abspath(c)
+                    break
+
+        if ewaste_model_path and os.path.exists(ewaste_model_path):
+            try:
+                self.ewaste_model = YOLO(ewaste_model_path)
+                print(f"[Stage 2 Detector] Successfully loaded E-Waste YOLO11 model from: {ewaste_model_path}", file=sys.stderr)
+            except Exception as e:
+                print(f"[Stage 2 Detector] Failed to load e-waste model: {e}", file=sys.stderr)
+
+        # General COCO fallback
+        if not general_model_path:
+            candidates = [
+                os.path.join(os.getcwd(), 'yolov8n.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'yolov8n.pt'),
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'yolov8n.pt'),
+                'c:/Users/hadol/projects/SIH_website/yolov8n.pt'
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    general_model_path = c
+                    break
+
+        if general_model_path and os.path.exists(general_model_path):
+            try:
+                self.general_model = YOLO(general_model_path)
+            except Exception as e:
+                print(f"[Stage 2 Detector] Failed to load general model: {e}", file=sys.stderr)
+
+    def detect(self, image: Image.Image) -> Dict[str, Any]:
+        """
+        Executes multi-object waste detection on the image.
+        Returns unified detections mapped to CleanTrack 11 classes,
+        stream breakdown, spatial coverage, volume, weight, and sharps count.
+        """
+        start_time = time.time()
+        if isinstance(image, str):
+            image = Image.open(image)
+        img_rgb = image.convert('RGB')
+        img_w, img_h = img_rgb.size
+
+        all_detections: List[Dict[str, Any]] = []
+        sharps_count = 0
+
+        # Pass 1A: Roboflow Medical Instance Segmentation (Cloud outline / Local container)
+        rf_result = None
+        if self.roboflow_detector:
+            try:
+                rf_result = self.roboflow_detector.predict(img_rgb)
+                if rf_result.get("success") and rf_result.get("detections"):
+                    for d in rf_result["detections"]:
+                        if any(compute_iou(d['box'], exist['box']) > 0.40 for exist in all_detections):
+                            continue
+                        if d.get("isSharps"):
+                            sharps_count += 1
+                        all_detections.append(d)
+            except Exception as rfe:
+                print(f"[Stage 2 Detector] Roboflow pass error: {rfe}", file=sys.stderr)
+
+        # Pass 1B: Medical Classifier (Full scene 17-class EfficientNet-B0 evaluation)
+        med_clf_res = None
+        if self.medical_classifier and self.medical_classifier.is_loaded:
+            try:
+                med_clf_res = self.medical_classifier.classify(img_rgb)
+                if med_clf_res.get("is_sharps") and sharps_count == 0:
+                    sharps_count = max(sharps_count, 1)
+            except Exception as mce:
+                print(f"[Stage 2 Detector] Medical classifier error: {mce}", file=sys.stderr)
+
+        # Pass 1C: Biomedical YOLOv8 Detections (conf=0.10 for small sharps & vial capture)
+        if self.biomedical_model:
+            try:
+                b_res = self.biomedical_model(img_rgb, conf=0.10, verbose=False)[0]
+                total_area = max(1, img_w * img_h)
+                for box in b_res.boxes:
+                    cls_idx = int(box.cls[0])
+                    raw_name = self.biomedical_model.names.get(cls_idx, f"class_{cls_idx}")
+                    conf = float(box.conf[0])
+                    xyxy = [round(x, 1) for x in box.xyxy[0].tolist()]
+                    xyxyn = [round(x, 4) for x in box.xyxyn[0].tolist()] if hasattr(box, 'xyxyn') else [0, 0, 0, 0]
+
+                    # Filter boundary / corner noise artifacts
+                    area = (xyxy[2] - xyxy[0]) * (xyxy[3] - xyxy[1])
+                    if xyxy[0] <= 2 and xyxy[1] <= 2 and area < 0.05 * total_area and conf < 0.25:
+                        continue
+
+                    # NMS de-overlap
+                    if any(compute_iou(xyxy, d['box']) > 0.40 for d in all_detections):
+                        continue
+
+                    unit = PHYSICAL_UNIT_MAP.get(raw_name, {
+                        'volume_l': 0.25,
+                        'weight_g': 25.0,
+                        'class_id': 8,
+                        'name': raw_name,
+                        'polymer': 'Clinical Biohazard Polymer',
+                        'is_sharps': any(s in raw_name.lower() for s in ['syringe', 'needle', 'ampoule', 'vial'])
+                    })
+
+                    if unit.get('is_sharps', False):
+                        sharps_count += 1
+
+                    class_info = CLEANTRACK_TAXONOMY[unit['class_id']]
+                    conf_pct = round(conf * 100.0, 1)
+
+                    all_detections.append({
+                        "classId": unit['class_id'],
+                        "categoryKey": class_info['key'],
+                        "category": class_info['label'],
+                        "rawClass": raw_name,
+                        "label": unit['name'],
+                        "polymer": unit['polymer'],
+                        "stream": class_info['stream'],
+                        "color": class_info['color'],
+                        "bg_color": class_info['bg_color'],
+                        "confidence": conf_pct,
+                        "volumeLiters": unit['volume_l'],
+                        "weightGrams": unit['weight_g'],
+                        "box": xyxy,
+                        "normalizedBox": xyxyn,
+                        "isSharps": unit.get('is_sharps', False)
+                    })
+            except Exception as be:
+                print(f"[Stage 2 Detector] Biomedical YOLO pass error: {be}", file=sys.stderr)
+
+
+        # Pass 2: E-Waste & Electronics Detections (conf=0.20, 37 classes from "Ewaste new model")
+        if self.ewaste_model:
+            try:
+                e_res = self.ewaste_model(img_rgb, conf=0.20, verbose=False)[0]
+                for box in e_res.boxes:
+                    cls_idx = int(box.cls[0])
+                    raw_name = self.ewaste_model.names.get(cls_idx, f"class_{cls_idx}")
+                    conf = float(box.conf[0])
+                    xyxy = [round(x, 1) for x in box.xyxy[0].tolist()]
+                    xyxyn = [round(x, 4) for x in box.xyxyn[0].tolist()] if hasattr(box, 'xyxyn') else [0, 0, 0, 0]
+
+                    # Priority check: If biomedical sharps box already claims this region, ignore duplicate
+                    if any(compute_iou(xyxy, d['box']) > 0.35 and d['classId'] == 8 for d in all_detections):
+                        continue
+
+                    # NMS de-overlap
+                    if any(compute_iou(xyxy, d['box']) > 0.40 for d in all_detections):
+                        continue
+
+                    unit = PHYSICAL_UNIT_MAP.get(raw_name, {
+                        'volume_l': 1.00,
+                        'weight_g': 350.0,
+                        'class_id': 6,
+                        'name': raw_name.replace('-', ' ').title(),
+                        'polymer': 'Electronic Scrap & Circuitry',
+                        'is_sharps': any(s in raw_name.lower() for s in ['lamp', 'tube'])
+                    })
+
+                    if unit.get('is_sharps', False):
+                        sharps_count += 1
+
+                    class_info = CLEANTRACK_TAXONOMY[unit['class_id']]
+                    conf_pct = round(conf * 100.0, 1)
+
+                    all_detections.append({
+                        "classId": unit['class_id'],
+                        "categoryKey": class_info['key'],
+                        "category": class_info['label'],
+                        "rawClass": raw_name,
+                        "label": unit['name'],
+                        "polymer": unit['polymer'],
+                        "stream": class_info['stream'],
+                        "color": class_info['color'],
+                        "bg_color": class_info['bg_color'],
+                        "confidence": conf_pct,
+                        "volumeLiters": unit['volume_l'],
+                        "weightGrams": unit['weight_g'],
+                        "box": xyxy,
+                        "normalizedBox": xyxyn,
+                        "isSharps": unit.get('is_sharps', False)
+                    })
+            except Exception as ee:
+                print(f"[Stage 2 Detector] E-Waste pass error: {ee}", file=sys.stderr)
+
+        # Pass 3: Plastic & Dry Recyclables Detections (conf=0.25)
+        if self.plastic_model:
+            try:
+                p_res = self.plastic_model(img_rgb, conf=0.25, verbose=False)[0]
+                for box in p_res.boxes:
+                    cls_idx = int(box.cls[0])
+                    raw_name = self.plastic_model.names.get(cls_idx, f"class_{cls_idx}")
+                    conf = float(box.conf[0])
+                    xyxy = [round(x, 1) for x in box.xyxy[0].tolist()]
+                    xyxyn = [round(x, 4) for x in box.xyxyn[0].tolist()] if hasattr(box, 'xyxyn') else [0, 0, 0, 0]
+
+                    # Priority check: If biomedical box (class 8) or e-waste box (class 6) already claims this region, ignore generic plastic duplicate
+                    if any((compute_iou(xyxy, d['box']) > 0.18 or compute_box_intersection_ratio(xyxy, d['box']) > 0.25) and d['classId'] in [6, 8] for d in all_detections):
+                        continue
+
+                    # NMS de-overlap
+                    if any(compute_iou(xyxy, d['box']) > 0.40 for d in all_detections):
+                        continue
+
+                    # Medical Crop Re-verification using 17-class MedicalWasteClassifier
+                    x1, y1, x2, y2 = max(0, int(xyxy[0])), max(0, int(xyxy[1])), min(img_w, int(xyxy[2])), min(img_h, int(xyxy[3]))
+                    reclassified_to_med = False
+                    DIRECT_CLINICAL_ITEMS = {
+                        'syringe', 'syringe_needle', 'test_tube', 'urine_bag', 'gauze', 'tweezers',
+                        'gloves', 'mask', 'body_tissue_organ'
+                    }
+                    if self.medical_classifier and self.medical_classifier.is_loaded and (x2 - x1) >= 25 and (y2 - y1) >= 25:
+                        try:
+                            crop = img_rgb.crop((x1, y1, x2, y2))
+                            c_res = self.medical_classifier.classify(crop)
+                            top_c = c_res.get('top_class')
+                            c_conf = c_res.get('confidence', 0.0)
+                            c_sharps = c_res.get('is_sharps', False)
+
+                            # Reclassify only if crop is confirmed direct clinical item (syringe, needle, tube, glove, mask)
+                            is_clinical_match = (
+                                (top_c in DIRECT_CLINICAL_ITEMS and c_conf >= 35.0) or
+                                c_sharps or
+                                (top_c in {'syringe', 'syringe_needle'} and c_conf >= 12.0) or
+                                (top_c == 'plastic_equipment_packaging' and c_conf >= 65.0)
+                            )
+                            if is_clinical_match:
+                                unit = PHYSICAL_UNIT_MAP.get(top_c, {
+                                    'volume_l': c_res.get('volume_l', 0.20),
+                                    'weight_g': c_res.get('weight_g', 20.0),
+                                    'class_id': 8,
+                                    'name': c_res.get('top_label', 'Clinical Biohazard Waste'),
+                                    'polymer': 'Clinical Biohazard Material',
+                                    'is_sharps': c_sharps or any(s in top_c for s in ['syringe', 'needle', 'vial', 'ampoule'])
+                                })
+                                is_sharps = unit.get('is_sharps', False) or c_sharps
+                                if is_sharps:
+                                    sharps_count += 1
+                                class_info = CLEANTRACK_TAXONOMY[8]
+                                all_detections.append({
+                                    "classId": 8,
+                                    "categoryKey": class_info['key'],
+                                    "category": class_info['label'],
+                                    "rawClass": top_c,
+                                    "label": unit['name'],
+                                    "polymer": unit['polymer'],
+                                    "stream": class_info['stream'],
+                                    "color": class_info['color'],
+                                    "bg_color": class_info['bg_color'],
+                                    "confidence": round(c_conf, 1),
+                                    "volumeLiters": unit['volume_l'],
+                                    "weightGrams": unit['weight_g'],
+                                    "box": xyxy,
+                                    "normalizedBox": xyxyn,
+                                    "isSharps": is_sharps,
+                                    "source": "CropReverifiedMedical"
+                                })
+                                reclassified_to_med = True
+                        except Exception:
+                            pass
+
+                    if reclassified_to_med:
+                        continue
+
+                    unit = PHYSICAL_UNIT_MAP.get(raw_name, {
+                        'volume_l': 0.60,
+                        'weight_g': 40.0,
+                        'class_id': 1,
+                        'name': raw_name.replace('_', ' ').title(),
+                        'polymer': 'Recyclable Polymer Composite',
+                        'is_sharps': False
+                    })
+
+                    class_info = CLEANTRACK_TAXONOMY[unit['class_id']]
+                    conf_pct = round(conf * 100.0, 1)
+
+                    all_detections.append({
+                        "classId": unit['class_id'],
+                        "categoryKey": class_info['key'],
+                        "category": class_info['label'],
+                        "rawClass": raw_name,
+                        "label": unit['name'],
+                        "polymer": unit['polymer'],
+                        "stream": class_info['stream'],
+                        "color": class_info['color'],
+                        "bg_color": class_info['bg_color'],
+                        "confidence": conf_pct,
+                        "volumeLiters": unit['volume_l'],
+                        "weightGrams": unit['weight_g'],
+                        "box": xyxy,
+                        "normalizedBox": xyxyn,
+                        "isSharps": False
+                    })
+            except Exception as pe:
+                print(f"[Stage 2 Detector] Plastic pass error: {pe}", file=sys.stderr)
+
+        # Pass 4: General COCO fallback for other common waste types (bottles, cups, cans, food waste)
+        if len(all_detections) == 0 and self.general_model:
+            try:
+                g_res = self.general_model(img_rgb, conf=0.35, verbose=False)[0]
+                for box in g_res.boxes:
+                    cls_name = self.general_model.names[int(box.cls[0])]
+                    conf = float(box.conf[0])
+                    xyxy = [round(x, 1) for x in box.xyxy[0].tolist()]
+                    xyxyn = [round(x, 4) for x in box.xyxyn[0].tolist()] if hasattr(box, 'xyxyn') else [0, 0, 0, 0]
+
+                    if cls_name in COCO_FALLBACK_MAP:
+                        finfo = COCO_FALLBACK_MAP[cls_name]
+                        class_info = CLEANTRACK_TAXONOMY[finfo['class_id']]
+                        conf_pct = round(conf * 100.0, 1)
+
+                        if any(compute_iou(xyxy, d['box']) > 0.40 for d in all_detections):
+                            continue
+
+                        all_detections.append({
+                            "classId": finfo['class_id'],
+                            "categoryKey": class_info['key'],
+                            "category": class_info['label'],
+                            "rawClass": cls_name,
+                            "label": finfo['name'],
+                            "polymer": "Mixed / Recyclable Material",
+                            "stream": class_info['stream'],
+                            "color": class_info['color'],
+                            "bg_color": class_info['bg_color'],
+                            "confidence": conf_pct,
+                            "volumeLiters": finfo['volume_l'],
+                            "weightGrams": finfo['weight_g'],
+                            "box": xyxy,
+                            "normalizedBox": xyxyn,
+                            "isSharps": False
+                        })
+            except Exception as ge:
+                print(f"[Stage 2 Detector] Fallback pass error: {ge}", file=sys.stderr)
+
+        # Pass 5: Medical Waste Classifier Synthesis (Ensemble trigger if scene is verified medical)
+        has_bio_in_detections = any(d['classId'] == 8 for d in all_detections)
+        should_synthesize = False
+        if len(all_detections) == 0 and med_clf_res and med_clf_res.get("is_medical", False):
+            should_synthesize = True
+        elif not has_bio_in_detections and med_clf_res and med_clf_res.get("is_medical", False) and (med_clf_res.get("is_sharps", False) or med_clf_res.get("confidence", 0.0) >= 35.0):
+            should_synthesize = True
+
+        if should_synthesize and med_clf_res:
+            top_raw = med_clf_res["top_class"]
+            unit = PHYSICAL_UNIT_MAP.get(top_raw, {
+                'volume_l': med_clf_res.get("volume_l", 0.25),
+                'weight_g': med_clf_res.get("weight_g", 25.0),
+                'class_id': 8,
+                'name': med_clf_res["top_label"],
+                'polymer': 'Clinical Biohazard Material',
+                'is_sharps': med_clf_res.get("is_sharps", False)
+            })
+
+            is_sharps = unit.get('is_sharps', False) or med_clf_res.get("is_sharps", False)
+            if is_sharps and sharps_count == 0:
+                sharps_count += 1
+
+            class_info = CLEANTRACK_TAXONOMY[8]
+            conf_pct = round(med_clf_res["confidence"], 1)
+
+            box_xyxy = [round(img_w * 0.15, 1), round(img_h * 0.15, 1), round(img_w * 0.85, 1), round(img_h * 0.85, 1)]
+            box_xyxyn = [0.15, 0.15, 0.85, 0.85]
+
+            all_detections.append({
+                "classId": 8,
+                "categoryKey": class_info['key'],
+                "category": class_info['label'],
+                "rawClass": top_raw,
+                "label": unit['name'],
+                "polymer": unit['polymer'],
+                "stream": class_info['stream'],
+                "color": class_info['color'],
+                "bg_color": class_info['bg_color'],
+                "confidence": conf_pct,
+                "volumeLiters": unit['volume_l'],
+                "weightGrams": unit['weight_g'],
+                "box": box_xyxy,
+                "normalizedBox": box_xyxyn,
+                "isSharps": is_sharps,
+                "source": "MedicalWasteClassifier"
+            })
+
+        # Compute Spatial Coverage & Aggregate Metrics
+        total_items = len(all_detections)
+        all_boxes = [d['box'] for d in all_detections]
+        total_coverage_pct = compute_box_union_coverage(all_boxes, img_w, img_h)
+
+        # Class breakdown
+        class_breakdown: Dict[int, Dict[str, Any]] = {}
+        total_volume_l = 0.0
+        total_weight_g = 0.0
+        confidences = []
+
+        for d in all_detections:
+            cid = d['classId']
+            if cid not in class_breakdown:
+                class_breakdown[cid] = {
+                    "classId": cid,
+                    "key": d['categoryKey'],
+                    "label": d['category'],
+                    "count": 0,
+                    "boxes": [],
+                    "volumeLiters": 0.0,
+                    "weightGrams": 0.0
+                }
+            class_breakdown[cid]["count"] += 1
+            class_breakdown[cid]["boxes"].append(d['box'])
+            class_breakdown[cid]["volumeLiters"] = round(class_breakdown[cid]["volumeLiters"] + d['volumeLiters'], 2)
+            class_breakdown[cid]["weightGrams"] = round(class_breakdown[cid]["weightGrams"] + d['weightGrams'], 1)
+            total_volume_l += d['volumeLiters']
+            total_weight_g += d['weightGrams']
+            confidences.append(d['confidence'])
+
+        # Compute per-class spatial coverage percentage
+        for cid, info in class_breakdown.items():
+            info["coveragePercent"] = compute_box_union_coverage(info["boxes"], img_w, img_h)
+
+        avg_confidence = round(sum(confidences) / len(confidences), 1) if confidences else 0.0
+        max_confidence = max(confidences) if confidences else 0.0
+
+        latency_ms = round((time.time() - start_time) * 1000.0, 2)
+
+        return {
+            "totalItems": total_items,
+            "detections": all_detections,
+            "sharpsCount": sharps_count,
+            "totalCoveragePercent": total_coverage_pct,
+            "plasticCoveragePercent": class_breakdown.get(1, {}).get("coveragePercent", 0.0),
+            "medicalCoveragePercent": class_breakdown.get(8, {}).get("coveragePercent", 0.0),
+            "ewasteCoveragePercent": class_breakdown.get(6, {}).get("coveragePercent", 0.0),
+            "plasticDetectionsCount": class_breakdown.get(1, {}).get("count", 0),
+            "medicalDetectionsCount": class_breakdown.get(8, {}).get("count", 0),
+            "ewasteDetectionsCount": class_breakdown.get(6, {}).get("count", 0),
+            "totalVolumeLiters": round(total_volume_l, 2),
+            "totalVolumeM3": round(total_volume_l / 1000.0, 4),
+            "totalWeightKg": round(total_weight_g / 1000.0, 2),
+            "classBreakdown": class_breakdown,
+            "averageConfidence": avg_confidence,
+            "maxConfidence": max_confidence,
+            "latency_ms": latency_ms,
+            "medicalClassifier": med_clf_res,
+            "roboflowStatus": self.roboflow_detector.status() if self.roboflow_detector else None,
+            "roboflowResult": rf_result,
+            "hasSegmentation": any(d.get("hasSegmentation") for d in all_detections)
+        }
+

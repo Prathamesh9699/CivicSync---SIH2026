@@ -1,0 +1,100 @@
+{
+  "taxonomy": [
+    {
+      "id": 0,
+      "name": "organic_wet",
+      "label": "Organic & Wet Waste",
+      "stream": "Green Stream \u2014 Biomethanation & Aerobic Composting",
+      "cpcb_color": "#16a34a"
+    },
+    {
+      "id": 1,
+      "name": "plastic",
+      "label": "Plastic Waste",
+      "stream": "Blue Stream \u2014 Extended Producer Responsibility (EPR) Recycling",
+      "cpcb_color": "#0284c7"
+    },
+    {
+      "id": 2,
+      "name": "paper_cardboard",
+      "label": "Paper & Cardboard",
+      "stream": "Blue Stream \u2014 Paper Mill Pulping & Fiber Recovery",
+      "cpcb_color": "#d97706"
+    },
+    {
+      "id": 3,
+      "name": "metal",
+      "label": "Metal & Aluminium",
+      "stream": "Blue Stream \u2014 Foundry Smelting & Metal Ingot Recovery",
+      "cpcb_color": "#64748b"
+    },
+    {
+      "id": 4,
+      "name": "glass",
+      "label": "Glassware & Glass Containers",
+      "stream": "Blue Stream \u2014 Glass Bottle Washing & Cullet Remelting",
+      "cpcb_color": "#2563eb"
+    },
+    {
+      "id": 5,
+      "name": "textile",
+      "label": "Textile & Discarded Fabrics",
+      "stream": "Dry Stream \u2014 Industrial Rags & Polymer Blending",
+      "cpcb_color": "#8b5cf6"
+    },
+    {
+      "id": 6,
+      "name": "ewaste",
+      "label": "Electronic Waste (E-Waste)",
+      "stream": "E-Waste Stream \u2014 Certified Urban Mining & Lithium Recovery",
+      "cpcb_color": "#059669"
+    },
+    {
+      "id": 7,
+      "name": "construction_debris",
+      "label": "Construction & Demolition Debris",
+      "stream": "C&D Stream \u2014 Mobile Crushing & M-Sand / Paver Block Manufacturing",
+      "cpcb_color": "#78716c"
+    },
+    {
+      "id": 8,
+      "name": "biomedical_sanitary",
+      "label": "Biomedical-Looking & Sanitary Waste",
+      "stream": "Yellow/White/Red Stream \u2014 Statutory Biohazard Incineration & Autoclaving",
+      "cpcb_color": "#dc2626"
+    },
+    {
+      "id": 9,
+      "name": "hazardous_looking",
+      "label": "Hazardous-Looking Containers",
+      "stream": "Hazardous Waste Stream \u2014 Authorized TSDF Secured Landfill / Neutralization",
+      "cpcb_color": "#ea580c"
+    },
+    {
+      "id": 10,
+      "name": "residual_mixed",
+      "label": "Residual & Mixed Municipal Waste",
+      "stream": "Refuse Derived Fuel (RDF) & Sanitary Landfill Processing",
+      "cpcb_color": "#475569"
+    }
+  ],
+  "splits": {
+    "train": {
+      "images": 0,
+      "positives": 0,
+      "negatives": 0
+    },
+    "val": {
+      "images": 0,
+      "positives": 0,
+      "negatives": 0
+    },
+    "test": {
+      "images": 0,
+      "positives": 0,
+      "negatives": 0
+    }
+  },
+  "class_distribution": {},
+  "validation_status": "PASSED"
+}

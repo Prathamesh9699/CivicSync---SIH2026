@@ -1,0 +1,16 @@
+{
+  "short_name": "CleanTrack",
+  "name": "CleanTrack - AI Powered Civic Cleanliness Platform",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#064e3b",
+  "theme_color": "#16a34a",
+  "display": "standalone",
+  "orientation": "portrait"
+}

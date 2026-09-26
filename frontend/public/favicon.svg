@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <defs>
+    <linearGradient id="ctGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e" />
+      <stop offset="100%" stop-color="#0d9488" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#16a34a" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <circle cx="50" cy="50" r="46" fill="#064e3b" />
+  <circle cx="50" cy="50" r="42" stroke="url(#ctGrad)" stroke-width="2.5" stroke-dasharray="6 4" opacity="0.8" />
+  <!-- Leaf and Location Pin combined -->
+  <path d="M50 20 C36 20 28 32 28 44 C28 58 45 74 50 80 C55 74 72 58 72 44 C72 32 64 20 50 20 Z" fill="url(#ctGrad)" filter="url(#glow)"/>
+  <!-- Inner leaf vein / pulse mark -->
+  <circle cx="50" cy="42" r="9" fill="#022c22" />
+  <path d="M50 36 C54 39 54 45 50 48 C46 45 46 39 50 36 Z" fill="#4ade80" />
+  <circle cx="50" cy="42" r="3" fill="#ffffff" />
+</svg>

@@ -1,0 +1,152 @@
+{
+  "taxonomy_version": "2.0.0",
+  "master_classes": [
+    {
+      "id": 0,
+      "name": "organic_wet",
+      "label": "Organic & Wet Waste",
+      "stream": "Green Stream \u2014 Biomethanation & Aerobic Composting",
+      "cpcb_color": "#16a34a"
+    },
+    {
+      "id": 1,
+      "name": "plastic",
+      "label": "Plastic Waste",
+      "stream": "Blue Stream \u2014 Extended Producer Responsibility (EPR) Recycling",
+      "cpcb_color": "#0284c7"
+    },
+    {
+      "id": 2,
+      "name": "paper_cardboard",
+      "label": "Paper & Cardboard",
+      "stream": "Blue Stream \u2014 Paper Mill Pulping & Fiber Recovery",
+      "cpcb_color": "#d97706"
+    },
+    {
+      "id": 3,
+      "name": "metal",
+      "label": "Metal & Aluminium",
+      "stream": "Blue Stream \u2014 Foundry Smelting & Metal Ingot Recovery",
+      "cpcb_color": "#64748b"
+    },
+    {
+      "id": 4,
+      "name": "glass",
+      "label": "Glassware & Glass Containers",
+      "stream": "Blue Stream \u2014 Glass Bottle Washing & Cullet Remelting",
+      "cpcb_color": "#2563eb"
+    },
+    {
+      "id": 5,
+      "name": "textile",
+      "label": "Textile & Discarded Fabrics",
+      "stream": "Dry Stream \u2014 Industrial Rags & Polymer Blending",
+      "cpcb_color": "#8b5cf6"
+    },
+    {
+      "id": 6,
+      "name": "ewaste",
+      "label": "Electronic Waste (E-Waste)",
+      "stream": "E-Waste Stream \u2014 Certified Urban Mining & Lithium Recovery",
+      "cpcb_color": "#059669"
+    },
+    {
+      "id": 7,
+      "name": "construction_debris",
+      "label": "Construction & Demolition Debris",
+      "stream": "C&D Stream \u2014 Mobile Crushing & M-Sand / Paver Block Manufacturing",
+      "cpcb_color": "#78716c"
+    },
+    {
+      "id": 8,
+      "name": "biomedical_sanitary",
+      "label": "Biomedical-Looking & Sanitary Waste",
+      "stream": "Yellow/White/Red Stream \u2014 Statutory Biohazard Incineration & Autoclaving",
+      "cpcb_color": "#dc2626"
+    },
+    {
+      "id": 9,
+      "name": "hazardous_looking",
+      "label": "Hazardous-Looking Containers",
+      "stream": "Hazardous Waste Stream \u2014 Authorized TSDF Secured Landfill / Neutralization",
+      "cpcb_color": "#ea580c"
+    },
+    {
+      "id": 10,
+      "name": "residual_mixed",
+      "label": "Residual & Mixed Municipal Waste",
+      "stream": "Refuse Derived Fuel (RDF) & Sanitary Landfill Processing",
+      "cpcb_color": "#475569"
+    }
+  ],
+  "source_mappings": {
+    "taco": {
+      "Aluminium foil": 3,
+      "Battery": 6,
+      "Aluminium can": 3,
+      "Aerosol": 3,
+      "Drink can": 3,
+      "Food can": 3,
+      "Cardboard": 2,
+      "Corrugated carton": 2,
+      "Paper bag": 2,
+      "Normal paper": 2,
+      "Clear plastic bottle": 1,
+      "Other plastic bottle": 1,
+      "Plastic bottle cap": 1,
+      "Plastic bag": 1,
+      "Plastic film": 1,
+      "Glass bottle": 4,
+      "Broken glass": 4,
+      "Food waste": 0,
+      "Clothing": 5,
+      "Unlabeled litter": 10
+    },
+    "zerowaste": {
+      "rigid_plastic": 1,
+      "cardboard": 2,
+      "metal": 3,
+      "soft_plastic": 1,
+      "residual_waste": 10
+    },
+    "custom_models": {
+      "pet": 1,
+      "pead": 1,
+      "mixed_plastic_soft": 1,
+      "mixed_plastic_rigid": 1,
+      "pet_oleo": 1,
+      "ecal": 2,
+      "metal": 3,
+      "cardboard": 2,
+      "Face Mask": 8,
+      "Medical/Surgical Glove": 8,
+      "Syringe": 8,
+      "Needle": 8,
+      "Needle Cap": 8,
+      "Bandage": 8,
+      "Gauze": 8,
+      "Cotton / Medical Cotton": 8,
+      "IV/Infusion Tube": 8,
+      "IV/Fluid Bottle": 8,
+      "Test Tube": 8,
+      "Medical Bottle / Vial": 8,
+      "Medicine Packaging": 8,
+      "Medical Packaging": 8,
+      "Sanitary Waste": 8,
+      "Medical Disposable": 8,
+      "Other Biomedical-looking Waste": 8,
+      "battery": 6,
+      "phone": 6,
+      "laptop": 6,
+      "keyboard": 6,
+      "mouse": 6,
+      "charger": 6,
+      "cable": 6,
+      "pcb": 6,
+      "paint_container": 9,
+      "chemical_container": 9,
+      "pesticide_container": 9,
+      "oil_container": 9
+    }
+  }
+}
