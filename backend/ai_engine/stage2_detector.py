@@ -489,24 +489,41 @@ class Stage2Detector:
             except Exception as dme:
                 print(f"[Stage 2 Detector] Failed to load degradable model: {dme}", file=sys.stderr)
 
-        # General COCO fallback
+                # General COCO fallback
         if not general_model_path:
             candidates = [
+                os.path.join(os.getcwd(), 'backend', 'models', 'yolov8n.pt'),
                 os.path.join(os.getcwd(), 'yolov8n.pt'),
-                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'yolov8n.pt'),
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'yolov8n.pt'),
-                'c:/Users/hadol/projects/SIH_website/yolov8n.pt'
+                os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    'models',
+                    'yolov8n.pt'
+                ),
+                os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                    'yolov8n.pt'
+                ),
+                'c:/Users/hadol/projects/SIH_website/backend/models/yolov8n.pt'
             ]
+
             for c in candidates:
                 if os.path.exists(c):
-                    general_model_path = c
+                    general_model_path = os.path.abspath(c)
                     break
 
         if general_model_path and os.path.exists(general_model_path):
             try:
                 self.general_model = YOLO(general_model_path)
+                print(
+                    f"[Stage 2 Detector] Successfully loaded General YOLO model from: "
+                    f"{general_model_path}",
+                    file=sys.stderr
+                )
             except Exception as e:
-                print(f"[Stage 2 Detector] Failed to load general model: {e}", file=sys.stderr)
+                print(
+                    f"[Stage 2 Detector] Failed to load general model: {e}",
+                    file=sys.stderr
+                )
 
     def detect(self, image: Image.Image) -> Dict[str, Any]:
         """
