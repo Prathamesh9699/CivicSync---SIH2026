@@ -15,6 +15,6 @@ export const env = {
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
   AI_SERVICE_URL: process.env.AI_SERVICE_URL || 'http://localhost:8000/api/ai',
   UPLOAD_DIR: process.env.UPLOAD_DIR || 'uploads',
-  SLA_TEST_MODE: process.env.SLA_TEST_MODE === 'true' || true,
+  SLA_TEST_MODE: process.env.SLA_TEST_MODE === 'true',
   NODE_ENV: process.env.NODE_ENV || 'development'
 };

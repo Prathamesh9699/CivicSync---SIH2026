@@ -3,15 +3,25 @@ import { env } from './env.js';
 
 export const connectDB = async () => {
   try {
+    if (!env.MONGODB_URI) {
+      throw new Error('MONGODB_URI is not defined');
+    }
+
     const conn = await mongoose.connect(env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 10000,
+      family: 4,
     });
-    console.log(`[CleanTrack DB] MongoDB Connected: ${conn.connection.host}/${conn.connection.name}`);
+
+    console.log(
+      `[CleanTrack DB] MongoDB Atlas Connected: ${conn.connection.host}/${conn.connection.name}`
+    );
+
     return conn;
   } catch (error) {
-    console.error(`[CleanTrack DB Error] Failed to connect to MongoDB at ${env.MONGODB_URI}:`, error.message);
-    console.error(`[CleanTrack DB] Make sure MongoDB is running locally (e.g. mongod) or provide a valid MongoDB Atlas connection string in backend/.env`);
-    // Return null without crashing immediately so API can provide meaningful diagnostic error
-    return null;
+    console.error(
+      `[CleanTrack DB Error] MongoDB Atlas connection failed: ${error.message}`
+    );
+
+    throw error;
   }
 };

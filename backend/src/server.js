@@ -40,27 +40,42 @@ setSocketIO(io);
 
 // Start Server & Connect Database
 const startServer = async () => {
-  await connectDB();
+  try {
+    await connectDB();
 
-  // Start periodic background SLA escalation job
-  startEscalationJob();
+    startEscalationJob();
 
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`\n⚠️  [Port Conflict] Port ${env.PORT} is already in use by another running instance.`);
-      console.error(`👉 The backend is already active on http://localhost:${env.PORT}\n`);
-    } else {
-      console.error('[Server Error]', err);
-    }
-  });
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(
+          `\n⚠️ [Port Conflict] Port ${env.PORT} is already in use.`
+        );
+        console.error(
+          `👉 The backend is already active on http://localhost:${env.PORT}\n`
+        );
+      } else {
+        console.error('[Server Error]', err);
+      }
+    });
 
-  server.listen(env.PORT, () => {
-    console.log(`====================================================`);
-    console.log(`🚀 CleanTrack Backend Engine Live on Port ${env.PORT}`);
-    console.log(`🌐 Health Check: http://localhost:${env.PORT}/api/health`);
-    console.log(`📡 Socket.io: ws://localhost:${env.PORT}`);
-    console.log(`====================================================`);
-  });
+    server.listen(env.PORT, () => {
+      console.log('====================================================');
+      console.log(
+        `🚀 CleanTrack Backend Engine Live on Port ${env.PORT}`
+      );
+      console.log(
+        `🌐 Health Check: http://localhost:${env.PORT}/api/health`
+      );
+      console.log(`📡 Socket.io: ws://localhost:${env.PORT}`);
+      console.log('====================================================');
+    });
+  } catch (error) {
+    console.error(
+      '[CleanTrack] Backend startup aborted because MongoDB connection failed.'
+    );
+    process.exit(1);
+  }
 };
 
 startServer();
+
