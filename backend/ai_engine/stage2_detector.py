@@ -492,18 +492,19 @@ class Stage2Detector:
                 # General COCO fallback
         if not general_model_path:
             candidates = [
-                os.path.join(os.getcwd(), 'backend', 'models', 'yolov8n.pt'),
-                os.path.join(os.getcwd(), 'yolov8n.pt'),
-                os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)),
-                    'models',
+                            os.path.join(os.getcwd(), 'ai', 'models', 'yolov8n.pt'),
+                            os.path.join(os.getcwd(), 'backend', 'models', 'yolov8n.pt'),
+                            os.path.join(os.getcwd(), 'yolov8n.pt'),
+                            os.path.join(
+                            os.path.dirname(os.path.dirname(_file_)),
+                            'models',
+                            'yolov8n.pt'
+                            ),
+                    os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(_file_))),
                     'yolov8n.pt'
-                ),
-                os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                    'yolov8n.pt'
-                ),
-                'c:/Users/hadol/projects/SIH_website/backend/models/yolov8n.pt'
+                    ),
+                'c:/Users/hadol/projects/SIH_website/ai/models/yolov8n.pt'
             ]
 
             for c in candidates:
