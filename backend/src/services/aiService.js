@@ -52,6 +52,7 @@ const resolveImagePayload = (imageInput) => {
 const queryHttpAiService = async (imagePayload, categoryHint, conditionHint) => {
   if (!env.AI_SERVICE_URL) return null;
   const targetUrl = `${env.AI_SERVICE_URL.replace(/\/+$/, '')}/analyze-waste`;
+console.log('[AI Service] Calling:', targetUrl);
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
