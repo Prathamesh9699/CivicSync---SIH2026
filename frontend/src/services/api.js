@@ -1,4 +1,9 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const isLocalhost = typeof window !== 'undefined' && 
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+export const API_BASE_URL = isLocalhost
+  ? 'http://localhost:5000/api'
+  : (import.meta.env.VITE_API_URL || 'https://cleantrack-backend-opb0.onrender.com/api');
 
 /**
  * Universal Fetch Client with JWT Token Injection & Error Handling
@@ -12,23 +17,32 @@ export async function apiRequest(endpoint, options = {}) {
     ...options.headers
   };
 
-  try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...options,
-      headers
-    });
+  const candidateBases = isLocalhost
+    ? ['http://localhost:5000/api', import.meta.env.VITE_API_URL || 'https://cleantrack-backend-opb0.onrender.com/api']
+    : [import.meta.env.VITE_API_URL || 'https://cleantrack-backend-opb0.onrender.com/api', 'http://localhost:5000/api'];
 
-    const data = await response.json().catch(() => ({}));
+  let lastError = null;
+  for (const base of candidateBases) {
+    if (!base) continue;
+    try {
+      const response = await fetch(`${base}${endpoint}`, {
+        ...options,
+        headers
+      });
 
-    if (!response.ok) {
-      throw new Error(data.message || `HTTP Error ${response.status}`);
+      const data = await response.json().catch(() => ({}));
+
+      if (response.ok) {
+        return data;
+      }
+      lastError = new Error(data.message || `HTTP Error ${response.status}`);
+    } catch (err) {
+      lastError = err;
     }
-
-    return data;
-  } catch (error) {
-    console.warn(`[CleanTrack API Connection Notice] ${endpoint}:`, error.message);
-    throw error;
   }
+
+  console.warn(`[CleanTrack API Connection Notice] ${endpoint}:`, lastError?.message);
+  throw lastError || new Error('Network request failed');
 }
 
 // Authentication APIs

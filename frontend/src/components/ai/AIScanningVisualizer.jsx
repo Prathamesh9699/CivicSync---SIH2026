@@ -57,18 +57,26 @@ export const AIScanningVisualizer = ({ imageUrl, isScanning = true, onScanComple
         {/* Dynamic Bounding Box Overlays */}
         {!isScanning && (
           <div className="absolute inset-0 pointer-events-none p-4 sm:p-6">
-            {!analysis?.annotatedImage && isPlasticDetected && topDetection && (
-              <div className="absolute top-1/4 left-1/4 w-1/2 h-1/2 border-2 border-emerald-400 bg-emerald-500/10 rounded-lg animate-pulse-subtle">
-                <div className="absolute -top-7 left-0 bg-emerald-600 text-white text-[11px] font-mono font-bold px-2.5 py-0.5 rounded shadow-lg flex items-center gap-1">
+            {!analysis?.annotatedImage && topDetection && Array.isArray(topDetection.normalizedBox) && topDetection.normalizedBox.some(v => v > 0) && (
+              <div 
+                className="absolute border-2 border-emerald-400 bg-emerald-500/10 rounded-lg animate-pulse-subtle"
+                style={{
+                  top: `${Math.max(0, topDetection.normalizedBox[1] * 100)}%`,
+                  left: `${Math.max(0, topDetection.normalizedBox[0] * 100)}%`,
+                  width: `${Math.min(100, (topDetection.normalizedBox[2] - topDetection.normalizedBox[0]) * 100)}%`,
+                  height: `${Math.min(100, (topDetection.normalizedBox[3] - topDetection.normalizedBox[1]) * 100)}%`
+                }}
+              >
+                <div className="absolute -top-7 left-0 bg-emerald-600 text-white text-[11px] font-mono font-bold px-2.5 py-0.5 rounded shadow-lg flex items-center gap-1 whitespace-nowrap">
                   <Sparkles className="w-3 h-3 text-emerald-200" />
-                  <span>{topDetection.label || "Plastic Waste"}: {topDetection.confidence}%</span>
+                  <span>{topDetection.label || topDetection.category || "Waste"}: {topDetection.confidence}%</span>
                 </div>
               </div>
             )}
 
-            {!isPlasticDetected && (
+            {analysis && analysis.totalItemsDetected === 0 && !isPlasticDetected && (
               <div className="absolute top-4 left-4 bg-slate-900/90 border border-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg">
-                <span>No prominent plastic accumulation detected</span>
+                <span>No prominent waste accumulation detected</span>
               </div>
             )}
 

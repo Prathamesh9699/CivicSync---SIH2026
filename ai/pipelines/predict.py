@@ -936,10 +936,27 @@ def analyze_image(image_input):
             except Exception:
                 pass
 
+def run_unified_prediction(img_input):
+    try:
+        try:
+            from ai.pipelines.pipeline import CleanTrackPipeline
+        except ImportError:
+            try:
+                from backend.ai_engine.pipeline import CleanTrackPipeline
+            except ImportError:
+                from pipeline import CleanTrackPipeline
+        pipeline = CleanTrackPipeline()
+        res = pipeline.process_image(img_input)
+        if res and res.get("success"):
+            return res
+    except Exception as e:
+        print(f"[Pipeline Warning] CleanTrackPipeline fallback: {e}", file=sys.stderr)
+    return analyze_image(img_input)
+
 if __name__ == '__main__':
     if len(sys.argv) > 1:
         input_data = sys.argv[1]
-        result = analyze_image(input_data)
+        result = run_unified_prediction(input_data)
         print(json.dumps(result))
     else:
         raw = sys.stdin.read().strip()
@@ -951,7 +968,7 @@ if __name__ == '__main__':
                     img = parsed.get('image') or parsed.get('imageUrl') or parsed.get('imageFile') or raw
             except Exception:
                 img = raw
-            res = analyze_image(img)
+            res = run_unified_prediction(img)
             print(json.dumps(res))
         else:
             print(json.dumps({"success": False, "error": "No image input provided"}))

@@ -629,29 +629,29 @@ class Stage2Detector:
                 print(f"[Stage 2 Detector] Medical classifier error: {mce}", file=sys.stderr)
         # Class-calibrated confidence thresholds to maximize medical item recall while preventing false positives
         BIOMEDICAL_MIN_CONFIDENCES = {
-            'Syringe': 0.20,
-            'Needle': 0.20,
-            'Needle Cap': 0.20,
-            'Test Tube': 0.22,
-            'Medical Bottle / Vial': 0.20,
-            'Face Mask': 0.25,
-            'Medical/Surgical Glove': 0.30,
-            'Bandage': 0.28,
-            'Gauze': 0.28,
-            'Cotton / Medical Cotton': 0.28,
-            'IV/Infusion Tube': 0.35,
-            'IV/Fluid Bottle': 0.25,
-            'Medicine Packaging': 0.28,
-            'Medical Packaging': 0.28,
-            'Sanitary Waste': 0.30,
-            'Medical Disposable': 0.28,
-            'Other Biomedical-looking Waste': 0.35,
+            'Syringe': 0.10,
+            'Needle': 0.10,
+            'Needle Cap': 0.10,
+            'Test Tube': 0.10,
+            'Medical Bottle / Vial': 0.10,
+            'Face Mask': 0.12,
+            'Medical/Surgical Glove': 0.12,
+            'Bandage': 0.12,
+            'Gauze': 0.12,
+            'Cotton / Medical Cotton': 0.12,
+            'IV/Infusion Tube': 0.12,
+            'IV/Fluid Bottle': 0.10,
+            'Medicine Packaging': 0.12,
+            'Medical Packaging': 0.12,
+            'Sanitary Waste': 0.12,
+            'Medical Disposable': 0.12,
+            'Other Biomedical-looking Waste': 0.10,
         }
 
         # Pass 1C: Biomedical YOLOv8 Detections (class-specific calibrated thresholds)
         if self.biomedical_model:
             try:
-                b_res = self.biomedical_model(img_rgb, conf=0.18, verbose=False)[0]
+                b_res = self.biomedical_model(img_rgb, imgsz=640, conf=0.10, verbose=False)[0]
                 total_area = max(1, img_w * img_h)
                 for box in b_res.boxes:
                     cls_idx = int(box.cls[0])
@@ -833,16 +833,20 @@ class Stage2Detector:
                         'glass_equipment_packaging', 'gauze', 'gloves', 'mask',
                         'medical_cap', 'shoe_cover', 'medical_glasses'
                     }
-                    has_prior_biomed = any(
-                        d['classId'] == 8 and not d.get('isReclassified') and (
-                            d.get('isSharps') or 
-                            any(s in str(d.get('rawClass', '')).lower() for s in ['syringe', 'needle', 'vial', 'tube', 'ampoule', 'glove', 'mask', 'cotton', 'bandage'])
+                    has_prior_biomed = (
+                        any(
+                            d['classId'] == 8 and not d.get('isReclassified') and (
+                                d.get('isSharps') or 
+                                any(s in str(d.get('rawClass', '')).lower() for s in ['syringe', 'needle', 'vial', 'tube', 'ampoule', 'glove', 'mask', 'cotton', 'bandage', 'waste', 'biohazard'])
+                            )
+                            for d in all_detections
+                        ) or (
+                            med_clf_res and med_clf_res.get("is_medical", False) and med_clf_res.get("confidence", 0.0) >= 40.0
                         )
-                        for d in all_detections
                     )
                     has_ewaste_present = any(d['classId'] == 6 for d in all_detections)
 
-                    if self.medical_classifier and self.medical_classifier.is_loaded and (x2 - x1) >= 28 and (y2 - y1) >= 28:
+                    if self.medical_classifier and self.medical_classifier.is_loaded and (x2 - x1) >= 24 and (y2 - y1) >= 24:
                         try:
                             crop = img_rgb.crop((x1, y1, x2, y2))
                             c_res = self.medical_classifier.classify(crop)
@@ -851,13 +855,13 @@ class Stage2Detector:
                             c_sharps = c_res.get('is_sharps', False)
 
                             # Reclassify if confirmed clinical item or confirmed packaging in clinical scene
-                            is_real_sharps = (top_c in {'syringe', 'syringe_needle'} and c_conf >= (40.0 if has_prior_biomed else 58.0))
-                            is_ampoule = (top_c == 'glass_equipment_packaging' and c_conf >= (50.0 if has_prior_biomed else 70.0))
-                            is_hygiene = (top_c in {'gloves', 'mask', 'gauze', 'test_tube', 'urine_bag'} and c_conf >= (45.0 if has_prior_biomed else 75.0))
-                            is_tissue = (has_prior_biomed and top_c == 'body_tissue_organ' and c_conf >= 85.0 and not has_ewaste_present)
+                            is_real_sharps = (top_c in {'syringe', 'syringe_needle'} and c_conf >= (28.0 if has_prior_biomed else 48.0))
+                            is_ampoule = (top_c in {'glass_equipment_packaging', 'test_tube', 'urine_bag', 'tweezers'} and c_conf >= (32.0 if has_prior_biomed else 58.0))
+                            is_hygiene = (top_c in {'gloves', 'mask', 'gauze', 'medical_cap', 'shoe_cover', 'medical_glasses'} and c_conf >= (35.0 if has_prior_biomed else 62.0))
+                            is_tissue = (has_prior_biomed and top_c in {'body_tissue_organ', 'organic_waste'} and c_conf >= 45.0 and not has_ewaste_present)
                             is_pkg = (
                                 not has_ewaste_present and (
-                                    has_prior_biomed and top_c in {'paper_equipment_packaging', 'plastic_equipment_packaging'} and c_conf >= 72.0
+                                    has_prior_biomed and top_c in {'paper_equipment_packaging', 'plastic_equipment_packaging'} and c_conf >= 55.0
                                 )
                             )
                             is_clinical_match = is_real_sharps or is_ampoule or is_hygiene or is_tissue or is_pkg
@@ -1073,9 +1077,13 @@ class Stage2Detector:
             except Exception as se:
                 print(f"[Stage 2 Detector] Structure suppression error: {se}", file=sys.stderr)
 
-        # Pass 5: Medical Waste Classifier Synthesis (Ensemble trigger ONLY if verified sharps or clinical items)
-        CLINICAL_SHARPS = {'syringe', 'syringe_needle'}
-        CLINICAL_HYGIENE = {'gauze', 'gloves', 'mask', 'medical_cap', 'shoe_cover', 'medical_glasses'}
+        # Pass 5: Medical Waste Classifier Synthesis (Ensemble trigger when verified medical classifier confirms clinical waste)
+        ALL_CLINICAL_CLASSES = {
+            'syringe', 'syringe_needle', 'glass_equipment_packaging',
+            'gloves', 'mask', 'gauze', 'medical_cap', 'shoe_cover', 'medical_glasses',
+            'body_tissue_organ', 'organic_waste', 'test_tube', 'tweezers', 'urine_bag',
+            'paper_equipment_packaging', 'plastic_equipment_packaging'
+        }
 
         has_bio_in_detections = any(d['classId'] == 8 for d in all_detections)
         has_ewaste_in_detections = any(d['classId'] == 6 for d in all_detections)
@@ -1087,14 +1095,13 @@ class Stage2Detector:
             is_sharps = med_clf_res.get("is_sharps", False)
 
             if len(all_detections) == 0:
-                if (is_sharps and c_conf >= 40.0) or (top_raw in CLINICAL_SHARPS and c_conf >= 40.0) or (top_raw in CLINICAL_HYGIENE and c_conf >= 60.0):
+                if (top_raw in ALL_CLINICAL_CLASSES and c_conf >= 35.0) or (is_sharps and c_conf >= 30.0):
                     should_synthesize = True
             elif not has_bio_in_detections and not has_ewaste_in_detections:
-                if (is_sharps and c_conf >= 45.0) or (top_raw in CLINICAL_SHARPS and c_conf >= 45.0) or (top_raw in CLINICAL_HYGIENE and c_conf >= 65.0):
+                if (top_raw in ALL_CLINICAL_CLASSES and c_conf >= 40.0) or (is_sharps and c_conf >= 35.0):
                     should_synthesize = True
             elif not has_bio_in_detections and has_ewaste_in_detections:
-                # If e-waste is detected, ONLY synthesize biohazard if definitive syringes/needles exist (>= 50%)
-                if (is_sharps or top_raw in CLINICAL_SHARPS) and c_conf >= 50.0:
+                if (is_sharps or top_raw in {'syringe', 'syringe_needle'}) and c_conf >= 45.0:
                     should_synthesize = True
 
         if should_synthesize and med_clf_res:

@@ -518,18 +518,32 @@ class CleanTrackPipeline:
             for d in s2_res["detections"]
         )
 
+        med_clf = s2_res.get("medicalClassifier", {})
+        is_scene_med = isinstance(med_clf, dict) and med_clf.get("is_medical", False) and med_clf.get("confidence", 0.0) >= 45.0
+
         has_clinical_items = any(
-            any(s in k.lower() for s in ['syringe', 'needle', 'ampoule', 'vial', 'glove', 'mask', 'gauze', 'test tube', 'vacutainer'])
+            any(s in k.lower() for s in ['syringe', 'needle', 'ampoule', 'vial', 'glove', 'mask', 'gauze', 'test tube', 'vacutainer', 'biohazard', 'clinical', 'pathological', 'tissue', 'urine', 'medical'])
             for k in bio_counts
         )
-        has_genuine_bio = has_medical and (has_real_sharps or has_clinical_items or m_cov >= 25.0)
+        has_genuine_bio = (
+            has_medical and (has_real_sharps or has_clinical_items or m_cov >= 10.0 or bio_items_count > 0)
+        ) or (
+            is_scene_med and (s2_res["sharpsCount"] > 0 or has_clinical_items or med_clf.get("is_sharps", False) or med_clf.get("confidence", 0.0) >= 50.0 or bio_items_count > 0)
+        )
 
-        if has_real_sharps:
+        if has_real_sharps or s2_res["sharpsCount"] > 0 or (is_scene_med and med_clf.get("is_sharps", False)):
             category_label = "Medical Waste"
             category_key = "biomedical_sanitary"
             category_id = "02"
             segregation_stream = "YELLOW/WHITE STREAM — CBWTF Incineration & Autoclaving"
             subtype = "Clinical Sharps & Syringes (Critical Biohazard)"
+        elif has_genuine_bio or bio_items_count > 0:
+            category_label = "Medical Waste"
+            category_key = "biomedical_sanitary"
+            category_id = "02"
+            segregation_stream = "YELLOW/WHITE STREAM — CBWTF Incineration & Autoclaving"
+            top_bio = list(bio_counts.keys())[0] if bio_counts else (med_clf.get("top_label") if is_scene_med else "Clinical Refuse")
+            subtype = f"Biomedical Waste ({top_bio})" if not has_plastic else f"Mixed Waste with Clinical Refuse ({top_bio})"
         elif has_ewaste and (not has_genuine_bio or e_cov >= m_cov or ewaste_items_count >= bio_items_count or e_cov >= 15.0):
             category_label = "E-Waste"
             category_key = "ewaste"
@@ -537,13 +551,6 @@ class CleanTrackPipeline:
             segregation_stream = "GREY STREAM — Authorized E-Waste Dismantler (RoHS/EPR)"
             top_ew = list(ewaste_counts.keys())[0] if ewaste_counts else "Discarded Electronics"
             subtype = f"E-Waste Scrap ({top_ew})"
-        elif has_genuine_bio and (m_cov >= 20.0 or m_cov >= p_cov or (not has_plastic) or bio_items_count >= plastic_items_count or any('Syringe' in k or 'Needle' in k or 'Gauze' in k for k in bio_counts)):
-            category_label = "Medical Waste"
-            category_key = "biomedical_sanitary"
-            category_id = "02"
-            segregation_stream = "YELLOW/WHITE STREAM — CBWTF Incineration & Autoclaving"
-            top_bio = list(bio_counts.keys())[0] if bio_counts else "Clinical Waste"
-            subtype = f"Biomedical Waste ({top_bio})" if not has_plastic else f"Mixed Waste with Clinical Refuse ({top_bio})"
         elif biodegradable_items_count > 0 and (biodegradable_items_count >= plastic_items_count or b_cov >= p_cov or not has_plastic or biodegradable_items_count >= 4):
             category_label = "Organic / Biodegradable Waste"
             category_key = "organic_wet"

@@ -12,24 +12,87 @@ export const aiService = {
    * YOLOv8 Plastic Waste Image Analysis (best.pt model)
    */
   async analyzeWasteImage(imageFile, manualHint = null, conditionHint = null) {
-    // 1. Attempt Real Backend YOLO Engine (best.pt)
+    let base64Payload = null;
     try {
-      if (imageFile) {
+      if (typeof imageFile === 'string') {
+        base64Payload = imageFile;
+      } else if (imageFile instanceof Blob || (typeof File !== 'undefined' && imageFile instanceof File)) {
+        base64Payload = await new Promise((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result);
+          reader.onerror = rej;
+          reader.readAsDataURL(imageFile);
+        });
+      }
+    } catch (readErr) {
+      console.warn('[AI Service] Image read error:', readErr.message);
+    }
+
+    // 1. Attempt Primary Backend API (/api/ai/analyze)
+    try {
+      if (base64Payload || imageFile) {
         const response = await aiApi.analyze({
-          imageUrl: typeof imageFile === 'string' ? imageFile : undefined,
+          imageUrl: base64Payload || (typeof imageFile === 'string' ? imageFile : undefined),
           categoryHint: manualHint,
           conditionHint: conditionHint
         });
 
-        if (response && response.success && response.data) {
+        if (response && response.success && (response.data || response.analysis)) {
           return {
             success: true,
-            ...response.data
+            ...(response.data || response.analysis)
           };
         }
       }
     } catch (apiError) {
-      console.log('[AI Service] Backend offline or busy, using local AI inference model fallback');
+      console.warn('[AI Service] Backend API unreachable, trying direct AI vision server...', apiError.message);
+    }
+
+    // 2. Direct AI Vision Server Attempt (/api/ai/analyze-waste)
+    if (base64Payload) {
+      const isLocal = typeof window !== 'undefined' && 
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+      const aiEndpoints = [
+        ...(isLocal ? ['http://localhost:8000/api/ai/analyze-waste', 'http://localhost:8000/api/ai/analyze'] : []),
+        ...(import.meta.env.VITE_AI_API_URL ? [
+          `${import.meta.env.VITE_AI_API_URL.replace(/\/+$/, '')}/analyze-waste`,
+          `${import.meta.env.VITE_AI_API_URL.replace(/\/+$/, '')}/analyze`
+        ] : []),
+        'https://cleantrack-ai-0p97.onrender.com/api/ai/analyze-waste',
+        'https://cleantrack-ai-0p97.onrender.com/api/ai/analyze'
+      ];
+
+      for (const endpoint of aiEndpoints) {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 12000);
+          const aiRes = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageUrl: base64Payload,
+              image_base64: base64Payload,
+              image_url: base64Payload,
+              categoryHint: manualHint,
+              conditionHint: conditionHint
+            }),
+            signal: controller.signal
+          });
+          clearTimeout(timeout);
+          if (aiRes.ok) {
+            const aiData = await aiRes.json();
+            if (aiData && aiData.success) {
+              return {
+                success: true,
+                ...(aiData.data || aiData)
+              };
+            }
+          }
+        } catch (endpointErr) {
+          // Continue to next endpoint
+        }
+      }
     }
 
     // Simulate model inference time
@@ -214,6 +277,8 @@ export const aiService = {
       ? "CleanTrack 6-Class Degradable / Biodegradable YOLO Detector (best.pt)"
       : "YOLOv8 Plastic Waste Detection (best.pt)";
 
+    const isCustomUploadWithoutMatch = !manualHint && (imgStr.startsWith('data:') || imgStr.length > 500);
+
     const detections = isMedical
       ? [
           { label: "Clinical Syringe (Biohazard / Sharps)", confidence: 97.6, color: "#FFB800" },
@@ -243,8 +308,10 @@ export const aiService = {
           { label: "Overflowing Bin Litter", confidence: 92.4, color: "#0284c7" },
           { label: "PET Plastic Bottle", confidence: 89.8, color: "#0ea5e9" }
         ]
+      : isCustomUploadWithoutMatch
+      ? []
       : [
-          { label: "PET Plastic Beverage Bottle", confidence: 95.8, color: "#0284c7" }
+          { label: "PET Plastic Beverage Bottle", confidence: 92.0, color: "#0284c7" }
         ];
 
     const countsByClass = isMedical
@@ -255,6 +322,8 @@ export const aiService = {
       ? { "Heavy Plastic Heap": 1, "Rigid Packaging": 4 }
       : severity === "Medium"
       ? { "PET Plastic Bottle": 3, "Plastic Cup": 2 }
+      : isCustomUploadWithoutMatch
+      ? {}
       : { "PET Plastic Beverage Bottle": 1 };
 
     const estimatedVolumeLiters = estVolL;

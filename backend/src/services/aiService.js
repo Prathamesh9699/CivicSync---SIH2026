@@ -51,42 +51,31 @@ const resolveImagePayload = (imageInput) => {
 
 const queryHttpAiService = async (imagePayload, categoryHint, conditionHint) => {
   if (!env.AI_SERVICE_URL) return null;
+  const targetUrl = `${env.AI_SERVICE_URL.replace(/\/+$/, '')}/analyze-waste`;
   try {
-    const base = env.AI_SERVICE_URL.replace(/\/+$/, '');
-    const endpoints = [
-      `${base}/analyze-waste`,
-      `${base}/analyze`,
-      base
-    ];
-    for (const url of endpoints) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 12000);
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            image_url: imagePayload,
-            imageUrl: imagePayload,
-            image_base64: imagePayload,
-            categoryHint,
-            conditionHint
-          }),
-          signal: controller.signal
-        });
-        clearTimeout(timeout);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.success) {
-            return data;
-          }
-        }
-      } catch (e) {
-        // Fall through to next endpoint
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const res = await fetch(targetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_url: imagePayload,
+        imageUrl: imagePayload,
+        image_base64: imagePayload,
+        categoryHint,
+        conditionHint
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        return data;
       }
     }
   } catch (err) {
-    console.warn('[AI Service] HTTP AI service unreachable:', err.message);
+    // Falls through directly to local Python YOLO pipeline
   }
   return null;
 };

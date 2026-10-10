@@ -34,7 +34,19 @@ app.use(helmet({
 
 // CORS Configuration
 app.use(cors({
-  origin: [env.CLIENT_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (
+      origin.startsWith('http://localhost:') || 
+      origin.startsWith('http://127.0.0.1:') || 
+      origin === env.CLIENT_URL ||
+      origin.includes('onrender.com') ||
+      origin.includes('vercel.app')
+    ) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
   credentials: true
 }));
 
@@ -47,8 +59,8 @@ const limiter = rateLimit({
 app.use('/api', limiter);
 
 // Body Parsers
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Static uploads directory
 app.use('/uploads', express.static(path.resolve(__dirname, '../uploads')));
