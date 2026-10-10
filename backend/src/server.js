@@ -9,7 +9,7 @@ app.set('trust proxy', 1);
 
 const server = http.createServer(app);
 
-const server = http.createServer(app);
+
 
 // Socket.io for Real-Time Cleanliness Alerts
 const io = new Server(server, {
