@@ -50,15 +50,24 @@ const resolveImagePayload = (imageInput) => {
 };
 
 const queryHttpAiService = async (imagePayload, categoryHint, conditionHint) => {
-  if (!env.AI_SERVICE_URL) return null;
+  if (!env.AI_SERVICE_URL) {
+    console.error('[AI Service] AI_SERVICE_URL is missing');
+    return null;
+  }
+
   const targetUrl = `${env.AI_SERVICE_URL.replace(/\/+$/, '')}/analyze-waste`;
-console.log('[AI Service] Calling:', targetUrl);
+
+  console.log('[AI Service] Calling:', targetUrl);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
     const res = await fetch(targetUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         image_url: imagePayload,
         imageUrl: imagePayload,
@@ -68,17 +77,43 @@ console.log('[AI Service] Calling:', targetUrl);
       }),
       signal: controller.signal
     });
-    clearTimeout(timeout);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.success) {
-        return data;
-      }
+
+    const responseText = await res.text();
+
+    console.log('[AI Service] HTTP status:', res.status);
+    console.log('[AI Service] Response:', responseText.slice(0, 1000));
+
+    if (!res.ok) {
+      console.error('[AI Service] Request failed with status:', res.status);
+      return null;
     }
+
+    let data;
+
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      console.error('[AI Service] Response was not valid JSON');
+      return null;
+    }
+
+    if (data && data.success) {
+      return data;
+    }
+
+    console.error('[AI Service] Response did not contain success: true');
+    return null;
   } catch (err) {
-    // Falls through directly to local Python YOLO pipeline
+    if (err.name === 'AbortError') {
+      console.error('[AI Service] Request timed out after 60 seconds');
+    } else {
+      console.error('[AI Service] Request error:', err.message);
+    }
+
+    return null;
+  } finally {
+    clearTimeout(timeout);
   }
-  return null;
 };
 
 const runYoloInference = (imageInput) => {
