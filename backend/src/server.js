@@ -5,6 +5,9 @@ import { connectDB } from './config/database.js';
 import { env } from './config/env.js';
 import { setSocketIO } from './services/notificationService.js';
 import { startEscalationJob } from './jobs/escalationJob.js';
+app.set('trust proxy', 1);
+
+const server = http.createServer(app);
 
 const server = http.createServer(app);
 
