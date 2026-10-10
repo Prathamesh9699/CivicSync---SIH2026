@@ -277,6 +277,7 @@ class RoboflowMedicalDetector:
         self.api_key = api_key or os.getenv("ROBOFLOW_API_KEY", "rf_sg7J8vYlWPb37GwXm5O0XytyKMt2")
         self.confidence_threshold = confidence_threshold
         self.server_url = server_url or os.getenv("ROBOFLOW_INFERENCE_SERVER_URL")
+        self._disabled = False
 
         # Track execution status and diagnostics
         self.last_status: Dict[str, Any] = {
@@ -311,6 +312,15 @@ class RoboflowMedicalDetector:
         Returns parsed segmentation detections, polygons, bounding boxes,
         and CleanTrack taxonomy mapping.
         """
+        if getattr(self, '_disabled', False):
+            return {
+                "success": False,
+                "error": "Roboflow disabled due to prior authentication error",
+                "detections": [],
+                "segmentation_available": False,
+                "fallback_triggered": True
+            }
+
         start_time = time.time()
 
         if not self.api_key or not self.model_id:
@@ -378,6 +388,7 @@ class RoboflowMedicalDetector:
                 self.last_status["last_error"] = f"HTTP {he.code}: {err_msg[:200]}"
                 # If 401 Unauthorized for serverless inference, log once and break out to local fallback
                 if he.code in (401, 403):
+                    self._disabled = True
                     break
             except Exception as net_err:
                 self.last_status["endpoint_available"] = False

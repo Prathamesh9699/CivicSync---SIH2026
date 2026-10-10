@@ -12,7 +12,7 @@ import sys
 import io
 import time
 from typing import Optional
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from PIL import Image
@@ -41,7 +41,9 @@ pipeline = CleanTrackPipeline()
 
 class AnalyzeJsonRequest(BaseModel):
     image_url: Optional[str] = None
+    imageUrl: Optional[str] = None
     image_base64: Optional[str] = None
+    image: Optional[str] = None
     image_path: Optional[str] = None
 
 
@@ -97,7 +99,9 @@ async def gatekeeper_check(
 
 
 @app.post("/api/ai/analyze-waste")
+@app.post("/api/ai/analyze")
 async def analyze_waste(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     image_url: Optional[str] = Form(None),
     image_base64: Optional[str] = Form(None),
@@ -105,16 +109,33 @@ async def analyze_waste(
 ):
     try:
         input_data = None
-        if file:
-            contents = await file.read()
-            input_data = Image.open(io.BytesIO(contents)).convert('RGB')
-        elif image_url:
-            input_data = image_url
-        elif image_base64:
-            input_data = image_base64
-        elif image_path:
-            input_data = image_path
-        else:
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            try:
+                body = await request.json()
+                input_data = (
+                    body.get("image_url") or 
+                    body.get("imageUrl") or 
+                    body.get("image_base64") or 
+                    body.get("image") or 
+                    body.get("imageFile") or 
+                    body.get("image_path")
+                )
+            except Exception:
+                pass
+
+        if not input_data:
+            if file:
+                contents = await file.read()
+                input_data = Image.open(io.BytesIO(contents)).convert('RGB')
+            elif image_url:
+                input_data = image_url
+            elif image_base64:
+                input_data = image_base64
+            elif image_path:
+                input_data = image_path
+
+        if not input_data:
             raise HTTPException(status_code=400, detail="No image input provided")
 
         result = pipeline.process_image(input_data)

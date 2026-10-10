@@ -168,6 +168,20 @@ export const ReportWastePage = () => {
     if (sample.condition) {
       setWasteCondition(sample.condition);
     }
+    if (sample.url && !sample.url.startsWith('data:')) {
+      fetch(sample.url)
+        .then(res => res.blob())
+        .then(blob => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            if (reader.result) {
+              setImagePreview(reader.result);
+            }
+          };
+          reader.readAsDataURL(blob);
+        })
+        .catch(() => {});
+    }
   };
 
   const validateStep1 = () => {

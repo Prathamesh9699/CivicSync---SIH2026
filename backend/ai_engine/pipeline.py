@@ -146,9 +146,13 @@ class CleanTrackPipeline:
                     image_input,
                     os.path.abspath(image_input),
                     os.path.join(os.getcwd(), image_input.lstrip('/\\')),
+                    os.path.join(os.getcwd(), 'frontend', 'public', image_input.lstrip('/\\')),
+                    os.path.join(os.getcwd(), 'frontend', 'dist', image_input.lstrip('/\\')),
                     os.path.join(os.path.dirname(os.path.dirname(__file__)), image_input.lstrip('/\\')),
                     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), image_input.lstrip('/\\')),
-                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'public', image_input.lstrip('/\\'))
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'public', image_input.lstrip('/\\')),
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'frontend', 'public', image_input.lstrip('/\\')),
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'frontend', 'dist', image_input.lstrip('/\\'))
                 ]
                 for c in candidates:
                     if os.path.exists(c) and os.path.isfile(c):
@@ -514,27 +518,33 @@ class CleanTrackPipeline:
             for d in s2_res["detections"]
         )
 
+        has_clinical_items = any(
+            any(s in k.lower() for s in ['syringe', 'needle', 'ampoule', 'vial', 'glove', 'mask', 'gauze', 'test tube', 'vacutainer'])
+            for k in bio_counts
+        )
+        has_genuine_bio = has_medical and (has_real_sharps or has_clinical_items or m_cov >= 25.0)
+
         if has_real_sharps:
             category_label = "Medical Waste"
             category_key = "biomedical_sanitary"
             category_id = "02"
             segregation_stream = "YELLOW/WHITE STREAM — CBWTF Incineration & Autoclaving"
             subtype = "Clinical Sharps & Syringes (Critical Biohazard)"
-        elif has_ewaste and (not has_medical or e_cov >= m_cov or ewaste_items_count >= bio_items_count or e_cov >= 15.0):
+        elif has_ewaste and (not has_genuine_bio or e_cov >= m_cov or ewaste_items_count >= bio_items_count or e_cov >= 15.0):
             category_label = "E-Waste"
             category_key = "ewaste"
             category_id = "03"
             segregation_stream = "GREY STREAM — Authorized E-Waste Dismantler (RoHS/EPR)"
             top_ew = list(ewaste_counts.keys())[0] if ewaste_counts else "Discarded Electronics"
             subtype = f"E-Waste Scrap ({top_ew})"
-        elif has_medical and (m_cov >= 20.0 or m_cov >= p_cov or (not has_plastic) or bio_items_count >= plastic_items_count or any('Tissue' in k or 'Pathological' in k or 'Syringe' in k or 'Needle' in k or 'Gauze' in k for k in bio_counts)):
+        elif has_genuine_bio and (m_cov >= 20.0 or m_cov >= p_cov or (not has_plastic) or bio_items_count >= plastic_items_count or any('Syringe' in k or 'Needle' in k or 'Gauze' in k for k in bio_counts)):
             category_label = "Medical Waste"
             category_key = "biomedical_sanitary"
             category_id = "02"
             segregation_stream = "YELLOW/WHITE STREAM — CBWTF Incineration & Autoclaving"
             top_bio = list(bio_counts.keys())[0] if bio_counts else "Clinical Waste"
             subtype = f"Biomedical Waste ({top_bio})" if not has_plastic else f"Mixed Waste with Clinical Refuse ({top_bio})"
-        elif biodegradable_items_count > 0 and (biodegradable_items_count >= plastic_items_count or b_cov >= p_cov or not has_plastic):
+        elif biodegradable_items_count > 0 and (biodegradable_items_count >= plastic_items_count or b_cov >= p_cov or not has_plastic or biodegradable_items_count >= 4):
             category_label = "Organic / Biodegradable Waste"
             category_key = "organic_wet"
             category_id = "04"
@@ -554,7 +564,7 @@ class CleanTrackPipeline:
             category_id = "03"
             segregation_stream = "GREY STREAM — Authorized E-Waste Dismantler (RoHS/EPR)"
             subtype = "Incidental Electronic Waste"
-        elif has_medical:
+        elif has_genuine_bio:
             category_label = "Medical Waste"
             category_key = "biomedical_sanitary"
             category_id = "02"

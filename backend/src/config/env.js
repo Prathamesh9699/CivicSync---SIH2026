@@ -13,7 +13,7 @@ export const env = {
   JWT_SECRET: process.env.JWT_SECRET || 'cleantrack_jwt_super_secret_key_2026_smart_city_secure',
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '7d',
   CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
-  AI_SERVICE_URL: process.env.AI_SERVICE_URL || 'http://localhost:8000/api/ai',
+  AI_SERVICE_URL: process.env.AI_SERVICE_URL || (process.env.NODE_ENV === 'production' ? 'https://cleantrack-ai-0p97.onrender.com/api/ai' : 'http://localhost:8000/api/ai'),
   UPLOAD_DIR: process.env.UPLOAD_DIR || 'uploads',
   SLA_TEST_MODE: process.env.SLA_TEST_MODE === 'true',
   NODE_ENV: process.env.NODE_ENV || 'development'

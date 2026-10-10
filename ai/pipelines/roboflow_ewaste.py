@@ -426,6 +426,7 @@ class RoboflowEWasteDetector:
         )
         self.local_url = local_url or os.getenv("ROBOFLOW_LOCAL_INFERENCE_URL", "http://localhost:9001")
         self.confidence_threshold = confidence_threshold
+        self._disabled = False
         self.last_status = {
             "configured": bool(self.model_id and self.api_key),
             "last_latency_ms": 0.0,
@@ -442,6 +443,14 @@ class RoboflowEWasteDetector:
         }
 
     def predict(self, image_input: Union[str, Image.Image]) -> Dict[str, Any]:
+        if getattr(self, '_disabled', False):
+            return {
+                "success": False,
+                "error": "Roboflow E-Waste disabled due to prior authentication error",
+                "latency_ms": 0.0,
+                "detections": []
+            }
+
         start_time = time.time()
 
         if isinstance(image_input, str):
@@ -493,6 +502,9 @@ class RoboflowEWasteDetector:
                     break
             except urllib.error.HTTPError as he:
                 last_error = f"HTTP {he.code} on {url.split('?')[0]}"
+                if he.code in (401, 403):
+                    self._disabled = True
+                    break
             except Exception as e:
                 last_error = str(e)
 

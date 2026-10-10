@@ -771,7 +771,13 @@ class Stage2Detector:
                         'glass_equipment_packaging', 'gauze', 'gloves', 'mask',
                         'medical_cap', 'shoe_cover', 'medical_glasses'
                     }
-                    has_prior_biomed = any(d['classId'] == 8 and (d.get('isSharps') or d.get('confidence', 0) >= 91.0) for d in all_detections)
+                    has_prior_biomed = any(
+                        d['classId'] == 8 and not d.get('isReclassified') and (
+                            d.get('isSharps') or 
+                            any(s in str(d.get('rawClass', '')).lower() for s in ['syringe', 'needle', 'vial', 'tube', 'ampoule', 'glove', 'mask', 'cotton', 'bandage'])
+                        )
+                        for d in all_detections
+                    )
                     has_ewaste_present = any(d['classId'] == 6 for d in all_detections)
 
                     if self.medical_classifier and self.medical_classifier.is_loaded and (x2 - x1) >= 28 and (y2 - y1) >= 28:
@@ -783,14 +789,13 @@ class Stage2Detector:
                             c_sharps = c_res.get('is_sharps', False)
 
                             # Reclassify if confirmed clinical item or confirmed packaging in clinical scene
-                            is_real_sharps = (top_c in {'syringe', 'syringe_needle'} and c_conf >= (35.0 if has_prior_biomed else 50.0))
-                            is_ampoule = (top_c == 'glass_equipment_packaging' and c_conf >= (45.0 if has_prior_biomed else 65.0))
-                            is_hygiene = (top_c in {'gloves', 'mask', 'gauze', 'test_tube', 'urine_bag'} and c_conf >= (38.0 if has_prior_biomed else 55.0))
-                            is_tissue = (top_c == 'body_tissue_organ' and c_conf >= 70.0 and not has_ewaste_present)
+                            is_real_sharps = (top_c in {'syringe', 'syringe_needle'} and c_conf >= (40.0 if has_prior_biomed else 58.0))
+                            is_ampoule = (top_c == 'glass_equipment_packaging' and c_conf >= (50.0 if has_prior_biomed else 70.0))
+                            is_hygiene = (top_c in {'gloves', 'mask', 'gauze', 'test_tube', 'urine_bag'} and c_conf >= (45.0 if has_prior_biomed else 75.0))
+                            is_tissue = (has_prior_biomed and top_c == 'body_tissue_organ' and c_conf >= 85.0 and not has_ewaste_present)
                             is_pkg = (
                                 not has_ewaste_present and (
-                                    (has_prior_biomed and top_c in {'paper_equipment_packaging', 'plastic_equipment_packaging'} and c_conf >= 65.0) or
-                                    (top_c in {'paper_equipment_packaging', 'plastic_equipment_packaging'} and c_conf >= 85.0)
+                                    has_prior_biomed and top_c in {'paper_equipment_packaging', 'plastic_equipment_packaging'} and c_conf >= 72.0
                                 )
                             )
                             is_clinical_match = is_real_sharps or is_ampoule or is_hygiene or is_tissue or is_pkg
@@ -826,6 +831,7 @@ class Stage2Detector:
                                     "box": xyxy,
                                     "normalizedBox": xyxyn,
                                     "isSharps": is_sharps,
+                                    "isReclassified": True,
                                     "source": "CropReverifiedMedical"
                                 })
                                 reclassified_to_med = True
@@ -880,14 +886,6 @@ class Stage2Detector:
                     xyxy = [round(x, 1) for x in box.xyxy[0].tolist()]
                     xyxyn = [round(x, 4) for x in box.xyxyn[0].tolist()] if hasattr(box, 'xyxyn') else [0, 0, 0, 0]
 
-                    # Priority check: Do not override verified sharps or critical medical biohazards
-                    if any((compute_iou(xyxy, d['box']) > 0.30 or compute_box_intersection_ratio(xyxy, d['box']) > 0.35) and d['classId'] == 8 and d.get('isSharps') for d in all_detections):
-                        continue
-
-                    # Soft-NMS de-overlap against already confirmed detections
-                    if any(compute_iou(xyxy, d['box']) > 0.40 for d in all_detections):
-                        continue
-
                     raw_upper = raw_name.upper()
                     unit = PHYSICAL_UNIT_MAP.get(raw_upper, PHYSICAL_UNIT_MAP.get(raw_name.lower(), {
                         'volume_l': 0.40,
@@ -903,6 +901,23 @@ class Stage2Detector:
                     class_info = CLEANTRACK_TAXONOMY[cid]
                     conf_pct = min(98.5, max(91.0, round((conf + 0.16) * 100.0, 1))) if conf >= 0.25 else round(conf * 100.0, 1)
                     is_bio = unit.get('is_biodegradable', False) or cid in [0, 2]
+
+                    # Priority check: Do not override verified sharps or critical medical biohazards
+                    if any((compute_iou(xyxy, d['box']) > 0.30 or compute_box_intersection_ratio(xyxy, d['box']) > 0.35) and d['classId'] == 8 and d.get('isSharps') for d in all_detections):
+                        continue
+
+                    # If this is confirmed biodegradable matter, purge overlapping generic soft plastic boxes
+                    if is_bio:
+                        overlapping_soft_plastic = [
+                            d for d in all_detections
+                            if d['classId'] == 1 and (compute_iou(xyxy, d['box']) > 0.20 or compute_box_intersection_ratio(xyxy, d['box']) > 0.30)
+                        ]
+                        if overlapping_soft_plastic:
+                            all_detections = [d for d in all_detections if d not in overlapping_soft_plastic]
+
+                    # Soft-NMS de-overlap against already confirmed detections
+                    if any(compute_iou(xyxy, d['box']) > 0.40 for d in all_detections):
+                        continue
 
                     if unit.get('is_sharps', False):
                         sharps_count += 1
@@ -1010,14 +1025,14 @@ class Stage2Detector:
             is_sharps = med_clf_res.get("is_sharps", False)
 
             if len(all_detections) == 0:
-                if (is_sharps and c_conf >= 35.0) or (top_raw in CLINICAL_SHARPS and c_conf >= 35.0) or (top_raw in CLINICAL_HYGIENE and c_conf >= 45.0) or (top_raw == 'body_tissue_organ' and c_conf >= 70.0) or c_conf >= 65.0:
+                if (is_sharps and c_conf >= 40.0) or (top_raw in CLINICAL_SHARPS and c_conf >= 40.0) or (top_raw in CLINICAL_HYGIENE and c_conf >= 60.0):
                     should_synthesize = True
             elif not has_bio_in_detections and not has_ewaste_in_detections:
-                if (is_sharps and c_conf >= 35.0) or (top_raw in CLINICAL_SHARPS and c_conf >= 35.0) or (top_raw in CLINICAL_HYGIENE and c_conf >= 48.0) or (top_raw == 'body_tissue_organ' and c_conf >= 75.0):
+                if (is_sharps and c_conf >= 45.0) or (top_raw in CLINICAL_SHARPS and c_conf >= 45.0) or (top_raw in CLINICAL_HYGIENE and c_conf >= 65.0):
                     should_synthesize = True
             elif not has_bio_in_detections and has_ewaste_in_detections:
                 # If e-waste is detected, ONLY synthesize biohazard if definitive syringes/needles exist (>= 50%)
-                if top_raw in CLINICAL_SHARPS and c_conf >= 50.0:
+                if (is_sharps or top_raw in CLINICAL_SHARPS) and c_conf >= 50.0:
                     should_synthesize = True
 
         if should_synthesize and med_clf_res:

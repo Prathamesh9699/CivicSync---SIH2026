@@ -1,3 +1,4 @@
+import { env } from '../config/env.js';
 import { calculatePriorityScore } from '../utils/priorityCalculator.js';
 import { AIAnalysis } from '../models/AIAnalysis.js';
 import { Complaint } from '../models/Complaint.js';
@@ -18,6 +19,77 @@ const candidatePaths = [
   path.resolve(process.cwd(), 'backend/ai_engine/predict.py')
 ];
 const SCRIPT_PATH = candidatePaths.find(p => fs.existsSync(p)) || candidatePaths[0];
+
+const resolveImagePayload = (imageInput) => {
+  if (!imageInput) return null;
+  if (typeof imageInput !== 'string') return imageInput;
+  if (imageInput.startsWith('data:image') || imageInput.startsWith('http://') || imageInput.startsWith('https://')) {
+    return imageInput;
+  }
+  const clean = imageInput.replace(/^\/+/, '');
+  const candidates = [
+    path.resolve(process.cwd(), clean),
+    path.resolve(process.cwd(), 'frontend/public', clean),
+    path.resolve(process.cwd(), 'frontend/dist', clean),
+    path.resolve(__dirname, '../../../frontend/public', clean),
+    path.resolve(__dirname, '../../../frontend/dist', clean),
+    path.resolve(__dirname, '../../uploads', path.basename(clean))
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c) && fs.statSync(c).isFile()) {
+      try {
+        const ext = path.extname(c).toLowerCase().replace('.', '') || 'jpeg';
+        const mime = ext === 'png' ? 'image/png' : (ext === 'webp' ? 'image/webp' : 'image/jpeg');
+        return `data:${mime};base64,` + fs.readFileSync(c).toString('base64');
+      } catch (err) {
+        return c;
+      }
+    }
+  }
+  return imageInput;
+};
+
+const queryHttpAiService = async (imagePayload, categoryHint, conditionHint) => {
+  if (!env.AI_SERVICE_URL) return null;
+  try {
+    const base = env.AI_SERVICE_URL.replace(/\/+$/, '');
+    const endpoints = [
+      `${base}/analyze-waste`,
+      `${base}/analyze`,
+      base
+    ];
+    for (const url of endpoints) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 12000);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_url: imagePayload,
+            imageUrl: imagePayload,
+            image_base64: imagePayload,
+            categoryHint,
+            conditionHint
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            return data;
+          }
+        }
+      } catch (e) {
+        // Fall through to next endpoint
+      }
+    }
+  } catch (err) {
+    console.warn('[AI Service] HTTP AI service unreachable:', err.message);
+  }
+  return null;
+};
 
 const runYoloInference = (imageInput) => {
   return new Promise((resolve) => {
@@ -72,37 +144,50 @@ export const aiService = {
    */
   async analyzeWasteImage({ imageFile, imageUrl, categoryHint = null, conditionHint = null }) {
     const startTime = Date.now();
-    const imageTarget = imageFile || imageUrl;
+    const rawTarget = imageFile || imageUrl;
+    const imageTarget = resolveImagePayload(rawTarget);
 
-    // 1. Try real YOLOv8 best.pt model
-    if (imageTarget) {
+    let realResult = null;
+
+    // 1. First attempt HTTP AI service (e.g. Render FastAPI server or local server)
+    if (imageTarget && env.AI_SERVICE_URL) {
       try {
-        const yoloResult = await runYoloInference(imageTarget);
-        if (yoloResult && yoloResult.success) {
-          const processingTimeMs = Date.now() - startTime;
-          return {
-            ...yoloResult,
-            processingTimeMs,
-            isFlaggedInvalid: yoloResult.isFlaggedInvalid !== undefined ? yoloResult.isFlaggedInvalid : (yoloResult.totalItemsDetected === 0),
-            invalidReason: yoloResult.invalidReason || (yoloResult.totalItemsDetected === 0 ? "No municipal or biomedical waste detected." : null),
-            duplicateDetection: {
-              hasDuplicate: false,
-              similarityScore: 12,
-              duplicateCount: 0,
-              duplicateIds: []
-            },
-            recurrenceDetection: {
-              isRecurring: false,
-              recurrenceLevel: "Low",
-              pastCleanupsCount: 0,
-              lastCleanedDaysAgo: 0,
-              rootCauseInference: "Standard collection routing"
-            }
-          };
-        }
+        realResult = await queryHttpAiService(imageTarget, categoryHint, conditionHint);
+      } catch (httpErr) {
+        console.warn('[AI Service] HTTP AI service error:', httpErr.message);
+      }
+    }
+
+    // 2. Fall back to local Python YOLO pipeline if HTTP did not return result
+    if (!realResult && imageTarget) {
+      try {
+        realResult = await runYoloInference(imageTarget);
       } catch (err) {
         console.warn('[AI Engine] YOLO fallback triggered:', err.message);
       }
+    }
+
+    if (realResult && realResult.success) {
+      const processingTimeMs = Date.now() - startTime;
+      return {
+        ...realResult,
+        processingTimeMs,
+        isFlaggedInvalid: realResult.isFlaggedInvalid !== undefined ? realResult.isFlaggedInvalid : (realResult.totalItemsDetected === 0),
+        invalidReason: realResult.invalidReason || (realResult.totalItemsDetected === 0 ? "No municipal or biomedical waste detected." : null),
+        duplicateDetection: {
+          hasDuplicate: false,
+          similarityScore: 12,
+          duplicateCount: 0,
+          duplicateIds: []
+        },
+        recurrenceDetection: {
+          isRecurring: false,
+          recurrenceLevel: "Low",
+          pastCleanupsCount: 0,
+          lastCleanedDaysAgo: 0,
+          rootCauseInference: "Standard collection routing"
+        }
+      };
     }
 
     // Default detection parameters matching master taxonomy

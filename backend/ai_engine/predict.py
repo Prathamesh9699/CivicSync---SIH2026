@@ -459,10 +459,14 @@ def analyze_image(image_input):
                     image_input,
                     os.path.abspath(image_input),
                     os.path.join(os.getcwd(), image_input.lstrip('/\\')),
+                    os.path.join(os.getcwd(), 'frontend', 'public', image_input.lstrip('/\\')),
+                    os.path.join(os.getcwd(), 'frontend', 'dist', image_input.lstrip('/\\')),
                     os.path.join(os.path.dirname(os.path.dirname(__file__)), image_input.lstrip('/\\')),
                     os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads', os.path.basename(image_input)),
                     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), image_input.lstrip('/\\')),
-                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'public', image_input.lstrip('/\\'))
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'public', image_input.lstrip('/\\')),
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'frontend', 'public', image_input.lstrip('/\\')),
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'frontend', 'dist', image_input.lstrip('/\\'))
                 ]
                 for c in candidates:
                     if os.path.exists(c) and os.path.isfile(c):
