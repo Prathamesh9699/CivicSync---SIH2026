@@ -496,12 +496,12 @@ class Stage2Detector:
                             os.path.join(os.getcwd(), 'backend', 'models', 'yolov8n.pt'),
                             os.path.join(os.getcwd(), 'yolov8n.pt'),
                             os.path.join(
-                            os.path.dirname(os.path.dirname(_file_)),
+                            os.path.dirname(os.path.dirname(__file__)),
                             'models',
                             'yolov8n.pt'
                             ),
                     os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.dirname(_file_))),
+                    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                     'yolov8n.pt'
                     ),
                 'c:/Users/hadol/projects/SIH_website/ai/models/yolov8n.pt'
