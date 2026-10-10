@@ -387,22 +387,102 @@ class Stage2Detector:
         if not YOLO_AVAILABLE:
             return
 
-        # Biomedical YOLO model search
+                # Biomedical YOLO model search
         if not biomedical_model_path:
             candidates = [
-                os.path.join(os.getcwd(), 'backend', 'models', 'biomedical_best.pt'),
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'biomedical_best.pt'),
-                os.path.join(os.getcwd(), 'Medical waste detection', 'CleanTrack_Image_Scanner', 'models', 'best.pt'),
-                os.path.join(os.getcwd(), 'Medical waste detection', 'CleanTrack_Image_Scanner', 'cleantrack_biomedical_best.pt'),
-                os.path.join(os.getcwd(), 'Biomedical_Waste_Detector', 'Biomedical_Waste_Detector', 'models', 'best.pt'),
-                os.path.join(os.getcwd(), 'Biomedical_Waste_Detector', 'models', 'best.pt'),
-                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'Biomedical_Waste_Detector', 'Biomedical_Waste_Detector', 'models', 'best.pt'),
-                'c:/Users/hadol/projects/SIH_website/backend/models/biomedical_best.pt'
+                # 1. Standard Render/project location
+                os.path.join(
+                    os.getcwd(),
+                    'backend',
+                    'models',
+                    'biomedical_best.pt'
+                ),
+
+                # 2. Relative to stage2_detector.py
+                os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    'models',
+                    'biomedical_best.pt'
+                ),
+
+                # 3. Project root -> ai/models
+                os.path.join(
+                    os.path.dirname(
+                        os.path.dirname(
+                            os.path.dirname(__file__)
+                        )
+                    ),
+                    'ai',
+                    'models',
+                    'biomedical_best.pt'
+                ),
+
+                # 4. Existing biomedical project location
+                os.path.join(
+                    os.getcwd(),
+                    'Medical waste detection',
+                    'CleanTrack_Image_Scanner',
+                    'models',
+                    'best.pt'
+                ),
+
+                # 5. Existing biomedical project location
+                os.path.join(
+                    os.getcwd(),
+                    'Medical waste detection',
+                    'CleanTrack_Image_Scanner',
+                    'cleantrack_biomedical_best.pt'
+                ),
+
+                # 6. Biomedical_Waste_Detector nested location
+                os.path.join(
+                    os.getcwd(),
+                    'Biomedical_Waste_Detector',
+                    'Biomedical_Waste_Detector',
+                    'models',
+                    'best.pt'
+                ),
+
+                # 7. Biomedical_Waste_Detector models location
+                os.path.join(
+                    os.getcwd(),
+                    'Biomedical_Waste_Detector',
+                    'models',
+                    'best.pt'
+                ),
+
+                # 8. Project root -> Biomedical_Waste_Detector
+                os.path.join(
+                    os.path.dirname(
+                        os.path.dirname(
+                            os.path.dirname(__file__)
+                        )
+                    ),
+                    'Biomedical_Waste_Detector',
+                    'Biomedical_Waste_Detector',
+                    'models',
+                    'best.pt'
+                )
             ]
-            for c in candidates:
-                if os.path.exists(c):
-                    biomedical_model_path = os.path.abspath(c)
+
+            for candidate in candidates:
+                if os.path.exists(candidate):
+                    biomedical_model_path = os.path.abspath(candidate)
                     break
+
+        if biomedical_model_path and os.path.exists(biomedical_model_path):
+            try:
+                self.biomedical_model = YOLO(biomedical_model_path)
+                print(
+                    f"[Stage 2 Detector] Successfully loaded Biomedical YOLO model from: "
+                    f"{biomedical_model_path}",
+                    file=sys.stderr
+                )
+            except Exception as e:
+                print(
+                    f"[Stage 2 Detector] Failed to load biomedical YOLO model: {e}",
+                    file=sys.stderr
+                )
 
         if biomedical_model_path and os.path.exists(biomedical_model_path):
             try:
