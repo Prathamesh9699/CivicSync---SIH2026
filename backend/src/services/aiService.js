@@ -113,14 +113,23 @@ const runYoloInference = (imageInput) => {
         resolve(null);
       });
 
-      pythonProcess.on('error', (err) => {
-        console.warn('[AI Engine] Python runner error:', err.message);
-        resolve(null);
-      });
+      // Handle errors from the Python process input pipe
+pythonProcess.stdin.on('error', (err) => {
+  if (err.code === 'EPIPE') {
+    console.warn('[AI Engine] Python input pipe closed before data was written.');
+  } else {
+    console.error('[AI Engine] Python stdin error:', err.message);
+  }
+  resolve(null);
+});
 
-      // Write payload to stdin
-      pythonProcess.stdin.write(imageInput);
-      pythonProcess.stdin.end();
+// Write payload safely
+try {
+  pythonProcess.stdin.end(imageInput);
+} catch (err) {
+  console.error('[AI Engine] Failed to send image to Python:', err.message);
+  resolve(null);
+}
     } catch (err) {
       console.warn('[AI Engine] Error starting python process:', err.message);
       resolve(null);
