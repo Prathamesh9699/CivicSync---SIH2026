@@ -484,13 +484,7 @@ class Stage2Detector:
                     file=sys.stderr
                 )
 
-        if biomedical_model_path and os.path.exists(biomedical_model_path):
-            try:
-                self.biomedical_model = YOLO(biomedical_model_path)
-                print(f"[Stage 2 Detector] Successfully loaded Biomedical YOLO model from: {biomedical_model_path}", file=sys.stderr)
-            except Exception as e:
-                print(f"[Stage 2 Detector] Failed to load biomedical YOLO model: {e}", file=sys.stderr)
-
+        
         # Plastic model search (Prioritize calibrated weights)
         if not plastic_model_path:
             candidates = [
@@ -569,24 +563,6 @@ class Stage2Detector:
             except Exception as dme:
                 print(f"[Stage 2 Detector] Failed to load degradable model: {dme}", file=sys.stderr)
 
-        # General COCO fallback
-        if not general_model_path:
-            candidates = [
-                os.path.join(os.getcwd(), 'yolov8n.pt'),
-                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'yolov8n.pt'),
-                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'yolov8n.pt'),
-                'c:/Users/hadol/projects/SIH_website/yolov8n.pt'
-            ]
-            for c in candidates:
-                if os.path.exists(c):
-                    general_model_path = c
-                    break
-
-        if general_model_path and os.path.exists(general_model_path):
-            try:
-                self.general_model = YOLO(general_model_path)
-            except Exception as e:
-                print(f"[Stage 2 Detector] Failed to load general model: {e}", file=sys.stderr)
 
     def detect(self, image: Image.Image) -> Dict[str, Any]:
         """
